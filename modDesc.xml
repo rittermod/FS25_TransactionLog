@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8" standalone="no" ?>
+<modDesc descVersion="98">
+    <author>Ritter</author>
+    <version>0.0.0.1</version>
+    <!-- <iconFilename>icon_TransactionLog.dds</iconFilename> -->
+    <title>
+        <en>Transaction log</en>
+    </title>
+    <description>
+        <en><![CDATA[Transaction log
+
+This mod adds a transaction log to the game, allowing you to keep track of all your financial transactions in a single place.
+Default keybinding is Right Shift + M.
+
+Changelog:
+
+0.0.0.1:
+- Initial release of the Transaction log mod.
+
+]]></en>
+    </description>
+    <extraSourceFiles>
+        <sourceFile filename="scripts/RM_TransactionLog.lua"/>
+    </extraSourceFiles>
+    <multiplayer supported="false"/>
+    <l10n filenamePrefix="languages/l10n" />
+    <inputBinding>
+        <actionBinding action="RM_SHOW_TRANSACTION_LOG">
+            <binding device="KB_MOUSE_DEFAULT" input="KEY_rshift KEY_m"/>
+        </actionBinding>
+    </inputBinding>
+    <actions>
+        <action name="RM_SHOW_TRANSACTION_LOG"/>
+    </actions>
+</modDesc>

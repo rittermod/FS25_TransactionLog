@@ -1,0 +1,72 @@
+<?xml version="1.0" encoding="utf-8" standalone="no" ?>
+<GUI onOpen="onOpen" onClose="onClose" onCreate="onCreate">
+    <Bitmap profile="dialogFullscreenBg" id="dialogBg"/>
+    <GuiElement profile="fs25_dialogBg" id="dialogElement" size="1400px 900px">
+        <ThreePartBitmap profile="fs25_dialogBgMiddle"/>
+        <ThreePartBitmap profile="fs25_dialogBgTop"/>
+        <ThreePartBitmap profile="fs25_dialogBgBottom"/>
+        <GuiElement profile="fs25_dialogContentContainer">
+            <Text profile="dialogTitle" text="$l10n_ui_transaction_log_title" id="dialogTitleElement" position="0px -30px"/>
+
+            <!-- Header for transaction list -->
+            <Bitmap profile="dialogTableList" id="tableHeaderBox" position="45px -80px" size="1270px 50px">
+                <Text profile="dialogTableHeaderLeftAligned" position="15px -0px" size="140px 40.77px"
+                      text="$l10n_ui_header_datetime"/>
+                <Text profile="dialogTableHeaderRightAligned" position="175px -0px" size="70px 40.77px" text="$l10n_ui_header_farm_id"/>
+                <Text profile="dialogTableHeaderLeftAligned" position="265px -0px" size="180px 40.77px"
+                      text="$l10n_ui_header_transaction_type"/>
+                <Text profile="dialogTableHeaderRightAligned" position="465px -0px" size="115px 40.77px" text="$l10n_ui_header_amount"/>
+                <Text profile="dialogTableHeaderRightAligned" position="600px -0px" size="115px 40.77px"
+                      text="$l10n_ui_header_balance"/>
+                <Text profile="dialogTableHeaderLeftAligned" position="735px -0px" size="430px 40.77px" text="$l10n_ui_header_comment"/>
+                <ThreePartBitmap profile="fs25_lineSeparatorBottom" position="0px 2px"/>
+            </Bitmap>
+
+            <!-- Transaction list -->
+            <SmoothList profile="dialogTableList" id="transactionTable" position="50px -135px" size="1265px 640px"
+                        focusInit="onOpen" focusChangeTop="nil" focusChangeBottom="nil">
+                <ListItem profile="dialogTableListItem" name="transactionRowTemplate" size="1250px 40.77px">
+                    <Text profile="dialogTableRowCellLeftAligned" position="15px 0px" size="140px 40.77px"
+                          name="ingameDateTime" textLayoutMode="scrolling"/>
+                    <Text profile="dialogTableRowCellRightAligned" position="175px 0px" size="70px 40.77px"
+                          name="farmId"/>
+                    <Text profile="dialogTableRowCellLeftAligned" position="265px 0px" size="180px 40.77px"
+                          name="transactionType" textLayoutMode="scrolling"/>
+                    <Text profile="dialogTableRowCellRightAligned" position="465px 0px" size="115px 40.77px"
+                          name="amount"/>
+                    <Text profile="dialogTableRowCellRightAligned" position="600px 0px" size="115px 40.77px"
+                          name="balance"/>
+                    <Text profile="dialogTableRowCellLeftAligned" position="735px 0px" size="430px 40.77px"
+                          name="comment"
+                          textLayoutMode="scrolling"/>
+                </ListItem>
+            </SmoothList>
+
+            <!-- Scrollbar -->
+            <ThreePartBitmap profile="fs25_listSliderBox" position="-50px -40px" size="12px 645px"
+                             with="anchorTopRight">
+                <Slider profile="fs25_listSlider" size="6px 637px" dataElementId="transactionTable" id="tableSlider"/>
+            </ThreePartBitmap>
+
+            <!-- Transaction summary -->
+            <GuiElement profile="dialogTableSummary" position="60px -775px" size="1245px 40px">
+                <Text profile="dialogTableHeaderLeftAligned" position="0px 0px" size="200px 40px"
+                      text="$l10n_ui_total_transactions"
+                      id="totalTransactionsLabel"/>
+                <Text profile="dialogTableRowCellLeftAligned" position="200px 0px" size="100px 40px" text="0"
+                      id="totalTransactionsValue"/>
+            </GuiElement>
+        </GuiElement>
+
+        <!-- Buttons -->
+        <BoxLayout profile="fs25_dialogButtonBox" size="1200px 60px">
+            <Button profile="buttonCancel" text="$l10n_ui_button_clear_log" onClick="onClickClearLog" id="buttonClearLog"/>
+            <Bitmap profile="fs25_dialogButtonBoxSeparator"/>
+            <Button profile="buttonExtra1" text="$l10n_ui_button_export_csv" onClick="onClickExportCSV" id="buttonExportCSV"/>
+            <Bitmap profile="fs25_dialogButtonBoxSeparator"/>
+            <Button profile="buttonOK" text="$l10n_ui_button_add_comment" onClick="onClickAddComment" id="buttonAddComment"/>
+            <Bitmap profile="fs25_dialogButtonBoxSeparator"/>
+            <Button profile="buttonBack" text="$l10n_ui_button_close" onClick="onClickClose"/>
+        </BoxLayout>
+    </GuiElement>
+</GUI>
