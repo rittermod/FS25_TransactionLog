@@ -11,7 +11,7 @@ source(RM_TransactionLog.dir .. "gui/TransactionLogFrame.lua")
 source(RM_TransactionLog.dir .. "gui/CommentInputDialog.lua")
 source(RM_TransactionLog.dir .. "scripts/RM_Utils.lua")
 
-function RM_TransactionLog:logTransaction(amount, farmId, moneyTypeTitle, currentFarmBalance)
+function RM_TransactionLog:logTransaction(amount, farmId, moneyTypeTitle, moneyTypeStatistic, currentFarmBalance)
     if math.abs(amount) < RM_TransactionLog.MIN_TRANSACTION_THRESHOLD then
         -- Ignore transactions that are very small, typically land flattening etc
         logDebug("Transaction amount is too small, ignoring: " .. tostring(amount))
@@ -42,14 +42,15 @@ function RM_TransactionLog:logTransaction(amount, farmId, moneyTypeTitle, curren
         farmId = farmId,
         amount = amount,
         transactionType = g_i18n:getText(moneyTypeTitle) or moneyTypeTitle,
+        transactionStatistic = moneyTypeStatistic,
         currentFarmBalance = currentFarmBalance or 0,
         comment = "",
     }
 
     table.insert(self.transactions, 1, transaction)
-    logInfo(string.format("[RM_TransactionLog] Transaction logged: %s %s | Farm ID: %d | Amount: %.2f | Type: %s | Current Balance: %.2f",
-            transaction.realDateTime, transaction.ingameDateTime, transaction.farmId, transaction.amount, transaction.transactionType, transaction.currentFarmBalance))
-    logTrace("[RM_TransactionLog] Transaction table size:", #self.transactions)
+    logInfo(string.format("Transaction logged: %s %s | Farm ID: %s | Amount: %.2f | Type: %s %s | Current Balance: %.2f",
+            transaction.realDateTime, transaction.ingameDateTime, transaction.farmId, transaction.amount, transaction.transactionType, transaction.transactionStatistic, transaction.currentFarmBalance))
+    logTrace("Transaction table size:", #self.transactions)
 end
 
 function RM_TransactionLog:showTransactionLog()
@@ -76,7 +77,7 @@ function RM_TransactionLog.changeFarmBalance(farm, amount, moneyType, ...)
     local currentEquity = farm:getEquity()
     logDebug(string.format("Current farm equity before change: %.2f", currentEquity))
 
-    RM_TransactionLog:logTransaction(amount, farm.farmId, moneyType.title, currentBalance)
+    RM_TransactionLog:logTransaction(amount, "farm-"..farm.farmId, moneyType.title, moneyType.statistic, currentBalance)
 
 end
 
@@ -98,9 +99,10 @@ function RM_TransactionLog:saveToXmlFile()
         local transactionKey = string.format("%s.transactions.transaction(%d)", rootKey, i)
         setXMLString(xmlFile, transactionKey .. "#realDateTime", transaction.realDateTime)
         setXMLString(xmlFile, transactionKey .. "#ingameDateTime", transaction.ingameDateTime)
-        setXMLInt(xmlFile, transactionKey .. "#farmId", transaction.farmId)
+        setXMLString(xmlFile, transactionKey .. "#farmId", transaction.farmId)
         setXMLFloat(xmlFile, transactionKey .. "#amount", transaction.amount)
         setXMLString(xmlFile, transactionKey .. "#transactionType", transaction.transactionType)
+        setXMLString(xmlFile, transactionKey .. "#transactionStatistic", transaction.transactionStatistic or "")
         setXMLFloat(xmlFile, transactionKey .. "#currentFarmBalance", transaction.currentFarmBalance or 0)
         setXMLString(xmlFile, transactionKey .. "#comment", transaction.comment or "")
         i = i + 1
@@ -141,9 +143,10 @@ function RM_TransactionLog:loadFromXMLFile()
         local transaction = {
             realDateTime = getXMLString(xmlFile, transactionKey .. "#realDateTime"),
             ingameDateTime = getXMLString(xmlFile, transactionKey .. "#ingameDateTime"),
-            farmId = getXMLInt(xmlFile, transactionKey .. "#farmId"),
+            farmId = getXMLString(xmlFile, transactionKey .. "#farmId"),
             amount = getXMLFloat(xmlFile, transactionKey .. "#amount"),
             transactionType = getXMLString(xmlFile, transactionKey .. "#transactionType"),
+            transactionStatistic = getXMLString(xmlFile, transactionKey .. "#transactionStatistic") or "",
             currentFarmBalance = getXMLFloat(xmlFile, transactionKey .. "#currentFarmBalance") or 0,
             comment = getXMLString(xmlFile, transactionKey .. "#comment") or "",
         }
