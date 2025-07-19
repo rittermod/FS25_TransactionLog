@@ -104,7 +104,7 @@ function RM_TransactionLog:saveToXmlFile()
     end
 
     saveXMLFile(xmlFile);
-    logInfo(string.format("Saved to %d transactions to transaction_log.xml.", i))
+    logInfo(string.format("Saved %d transactions to transaction_log.xml.", i))
     delete(xmlFile);
 end
 
