@@ -188,6 +188,36 @@ function RM_TransactionLog:addPlayerActionEvents(self, controlling)
     g_inputBinding:setActionEventTextVisibility(actionEventId, false)
 end
 
+
+
+
+function RM_TransactionLog:addMoney(amount, farmId, moneyType, ...)
+    -- amount, farmId, moneyType, addMoneyChange, forceShowMoneyChange
+   logTrace("g_currentMission:addMoney called with:")
+   logTrace(functionParametersToString(amount, farmId, moneyType, ...))
+
+   local currentBalance = g_currentMission.cacheFarm.money 
+
+   RM_TransactionLog:logTransaction(amount, "mission-"..farmId, moneyType.title, moneyType.statistic, currentBalance)
+
+end
+
+function RM_TransactionLog:currentMissionStarted()
+   logDebug("Current mission started")
+
+   -- Append the mod's addMoney function to the existing g_currentMission.addMoney function
+   -- Not sure this is the right hook, since it also captures money transactions not related to the player
+   if g_currentMission.addMoney == nil then
+       logError("g_currentMission.addMoney is nil, cannot append function.")
+       return
+   end
+   g_currentMission.addMoney = Utils.appendedFunction(g_currentMission.addMoney, RM_TransactionLog.addMoney)
+end
+
+
+g_messageCenter:subscribe(MessageType.CURRENT_MISSION_START, RM_TransactionLog.currentMissionStarted)
+
+
 PlayerInputComponent.registerGlobalPlayerActionEvents = Utils.appendedFunction(
         PlayerInputComponent.registerGlobalPlayerActionEvents, RM_TransactionLog.addPlayerActionEvents)
 
@@ -195,25 +225,3 @@ Farm.changeBalance = Utils.appendedFunction(Farm.changeBalance, RM_TransactionLo
 
 
 addModEventListener(RM_TransactionLog)
-
-
--- Probably obsolete, but keeping for reference for now
---function RM_TransactionLog:addMoney(amount, farmId, moneyType, ...)
---    logDebug("g_currentMission:addMoney called with:")
---    logFunctionParameters(amount, farmId, moneyType, ...)
---
---    RM_TransactionLog:logTransaction(amount, farmId, moneyType.title)
---
---end
---function RM_TransactionLog:currentMissionStarted()
---    logDebug("Current mission started")
---
---    -- Append the mod's addMoney function to the existing g_currentMission.addMoney function
---    -- Not sure this is the right hook, since it also captures money transactions not related to the player
---    if g_currentMission.addMoney == nil then
---        logError("g_currentMission.addMoney is nil, cannot append function.")
---        return
---    end
---    g_currentMission.addMoney = Utils.appendedFunction(g_currentMission.addMoney, RM_TransactionLog.addMoney)
---end
---g_messageCenter:subscribe(MessageType.CURRENT_MISSION_START, RM_TransactionLog.currentMissionStarted)
