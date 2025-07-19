@@ -1,5 +1,8 @@
 RM_TransactionLog = {}
 
+-- Constants
+RM_TransactionLog.MIN_TRANSACTION_THRESHOLD = 0.01  -- Minimum transaction amount to log
+
 -- Table to store transactions
 RM_TransactionLog.transactions = {}
 
@@ -9,7 +12,7 @@ source(RM_TransactionLog.dir .. "gui/CommentInputDialog.lua")
 source(RM_TransactionLog.dir .. "scripts/RM_Utils.lua")
 
 function RM_TransactionLog:logTransaction(amount, farmId, moneyTypeTitle, currentFarmBalance)
-    if math.abs(amount) < 0.01 then
+    if math.abs(amount) < RM_TransactionLog.MIN_TRANSACTION_THRESHOLD then
         -- Ignore transactions that are very small, typically land flattening etc
         logDebug("Transaction amount is too small, ignoring: " .. tostring(amount))
         return

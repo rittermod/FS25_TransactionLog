@@ -4,6 +4,9 @@
 TransactionLogFrame = {}
 local TransactionLogFrame_mt = Class(TransactionLogFrame, MessageDialog)
 
+-- Constants
+TransactionLogFrame.MAX_COMMENT_LENGTH = 200  -- Maximum characters allowed in comment input
+
 TransactionLogFrame.CONTROLS = {
     "transactionTable",
     "tableSlider",
@@ -149,7 +152,7 @@ function TransactionLogFrame:onClickAddComment()
         -- Show the comment dialog
         local existingComment = selectedTransaction.comment or ""
         local prompt = string.format(g_i18n:getText("ui_transaction_log_comment_prompt"), selectedTransaction.transactionType or g_i18n:getText("ui_transaction_log_unknown_type"), selectedTransaction.amount or 0)
-        CommentInputDialog.show(onCommentCallback, nil, existingComment, prompt, 200, nil)
+        CommentInputDialog.show(onCommentCallback, nil, existingComment, prompt, TransactionLogFrame.MAX_COMMENT_LENGTH, nil)
     end
 end
 

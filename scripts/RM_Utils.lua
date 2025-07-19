@@ -64,15 +64,15 @@ function logCommon(logFunc, ...)
             v = "(nil)"
         end
         if type(v) == "table" then
-            local str = ""
+            local parts = {}
             -- Convert table top level to string for logging
             for k, val in pairs(v) do
                 if type(val) == "table" then
                     val = "(table)"
                 end
-                str = str .. tostring(k) .. ": " .. tostring(val) .. ", "
+                table.insert(parts, tostring(k) .. ": " .. tostring(val))
             end
-            v = str:sub(1, -3)
+            v = table.concat(parts, ", ")
         end
         logFunc(logPrefix .. tostring(v))
     end
