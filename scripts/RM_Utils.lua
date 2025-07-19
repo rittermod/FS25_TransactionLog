@@ -1,5 +1,5 @@
-debugEnabled = false -- Set to true to enable debug logging
-logPrefix = "[RM_TransactionLog] "
+local debugEnabled = false -- Set to true to enable debug logging
+local logPrefix = "[RM_TransactionLog] "
 
 function logInfo(...)
     logCommon(Logging.info, ...)

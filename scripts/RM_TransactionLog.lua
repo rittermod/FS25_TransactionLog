@@ -68,9 +68,9 @@ function RM_TransactionLog.changeFarmBalance(farm, amount, moneyType, ...)
         logWarning("moneyType is nil, using MoneyType.OTHER")
     end
 
-    currentBalance = farm:getBalance()
+    local currentBalance = farm:getBalance()
     logDebug(string.format("Current farm balance after change: %.2f", currentBalance))
-    currentEquity = farm:getEquity()
+    local currentEquity = farm:getEquity()
     logDebug(string.format("Current farm equity before change: %.2f", currentEquity))
 
     RM_TransactionLog:logTransaction(amount, farm.farmId, moneyType.title, currentBalance)
