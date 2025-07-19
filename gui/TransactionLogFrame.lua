@@ -18,26 +18,26 @@ TransactionLogFrame.CONTROLS = {
 }
 
 function TransactionLogFrame.new(target, custom_mt)
-    logDebug("TransactionLogFrame:new()")
+    logTrace("TransactionLogFrame:new()")
     local self = MessageDialog.new(target, custom_mt or TransactionLogFrame_mt)
     self.transactions = {}
     return self
 end
 
 function TransactionLogFrame:onGuiSetupFinished()
-    logDebug("TransactionLogFrame:onGuiSetupFinished()")
+    logTrace("TransactionLogFrame:onGuiSetupFinished()")
     TransactionLogFrame:superClass().onGuiSetupFinished(self)
     self.transactionTable:setDataSource(self)
     self.transactionTable:setDelegate(self)
 end
 
 function TransactionLogFrame:onCreate()
-    logDebug("TransactionLogFrame:onCreate()")
+    logTrace("TransactionLogFrame:onCreate()")
     TransactionLogFrame:superClass().onCreate(self)
 end
 
 function TransactionLogFrame:onOpen()
-    logDebug("TransactionLogFrame:onOpen()")
+    logTrace("TransactionLogFrame:onOpen()")
     TransactionLogFrame:superClass().onOpen(self)
     
     -- Get transactions from the main transaction log
@@ -60,7 +60,7 @@ function TransactionLogFrame:onOpen()
 end
 
 function TransactionLogFrame:onClose()
-    logDebug("TransactionLogFrame:onClose()")
+    logTrace("TransactionLogFrame:onClose()")
     self.transactions = {}
     TransactionLogFrame:superClass().onClose(self)
 end
@@ -117,12 +117,12 @@ end
 
 -- Button handlers
 function TransactionLogFrame:onClickClose()
-    logDebug("TransactionLogFrame:onClickClose()")
+    logTrace("TransactionLogFrame:onClickClose()")
     self:close()
 end
 
 function TransactionLogFrame:onClickAddComment()
-    logDebug("TransactionLogFrame:onClickAddComment()")
+    logTrace("TransactionLogFrame:onClickAddComment()")
     
     -- Get the selected transaction
     local selectedIndex = self.transactionTable.selectedIndex
@@ -157,7 +157,7 @@ function TransactionLogFrame:onClickAddComment()
 end
 
 function TransactionLogFrame:onClickClearLog()
-    logDebug("TransactionLogFrame:onClickClearLog()")
+    logTrace("TransactionLogFrame:onClickClearLog()")
     
     -- Show confirmation dialog
     local confirmationText = string.format(g_i18n:getText("ui_transaction_log_clear_confirmation"), #self.transactions)
@@ -182,7 +182,7 @@ function TransactionLogFrame:onYesNoClearLog(yes)
 end
 
 function TransactionLogFrame:onClickExportCSV()
-    logDebug("TransactionLogFrame:onClickExportCSV()")
+    logTrace("TransactionLogFrame:onClickExportCSV()")
     
     if #self.transactions == 0 then
         InfoDialog.show(g_i18n:getText("ui_transaction_log_export_no_data"))
@@ -246,14 +246,14 @@ function TransactionLogFrame:onClickExportCSV()
 end
 
 function TransactionLogFrame.register()
-    logDebug("TransactionLogFrame.register()")
+    logTrace("TransactionLogFrame.register()")
     local dialog = TransactionLogFrame.new(g_i18n)
     g_gui:loadGui(RM_TransactionLog.dir .. "gui/TransactionLogFrame.xml", "TransactionLogFrame", dialog)
 end
 
 -- Static function to show the transaction log dialog
 function TransactionLogFrame.showTransactionLog()
-    logDebug("TransactionLogFrame.showTransactionLog()")
+    logTrace("TransactionLogFrame.showTransactionLog()")
     
     -- Create and show the dialog
     local dialog = TransactionLogFrame.new()

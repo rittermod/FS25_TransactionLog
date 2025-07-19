@@ -49,7 +49,7 @@ function RM_TransactionLog:logTransaction(amount, farmId, moneyTypeTitle, curren
     table.insert(self.transactions, 1, transaction)
     logInfo(string.format("[RM_TransactionLog] Transaction logged: %s %s | Farm ID: %d | Amount: %.2f | Type: %s | Current Balance: %.2f",
             transaction.realDateTime, transaction.ingameDateTime, transaction.farmId, transaction.amount, transaction.transactionType, transaction.currentFarmBalance))
-    logDebug("[RM_TransactionLog] Transaction table size:", #self.transactions)
+    logTrace("[RM_TransactionLog] Transaction table size:", #self.transactions)
 end
 
 function RM_TransactionLog:showTransactionLog()
@@ -61,8 +61,8 @@ function RM_TransactionLog:showTransactionLog()
 end
 
 function RM_TransactionLog.changeFarmBalance(farm, amount, moneyType, ...)
-    logDebug("Farm balance changed with parameters:")
-    logFunctionParameters(farm, amount, moneyType, ...)
+    logTrace("Farm balance changed with parameters:")
+    logTrace(functionParametersToString(farm, amount, moneyType, ...))
 
     -- Log the transaction
     if moneyType == nil then

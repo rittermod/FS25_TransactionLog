@@ -5,7 +5,7 @@ local function commentInputDialog_callback() end
 local modDirectory = g_currentModDirectory
 
 function CommentInputDialog.register()
-    logDebug("CommentInputDialog.register()")
+    logTrace("CommentInputDialog.register()")
     local dialog = CommentInputDialog.new()
     g_gui:loadGui(modDirectory .. "gui/CommentInputDialog.xml", "CommentInputDialog", dialog)
     CommentInputDialog.INSTANCE = dialog
@@ -13,7 +13,7 @@ function CommentInputDialog.register()
 end
 
 function CommentInputDialog.show(callback, target, text, prompt, maxCharacters, args)
-    logDebug("CommentInputDialog.show()")
+    logTrace("CommentInputDialog.show()")
     if CommentInputDialog.INSTANCE ~= nil then
         local dialog = CommentInputDialog.INSTANCE
         dialog:setText(text)
@@ -23,7 +23,7 @@ function CommentInputDialog.show(callback, target, text, prompt, maxCharacters, 
 end
 
 function CommentInputDialog.new(target, customMt)
-    logDebug("CommentInputDialog.new()")
+    logTrace("CommentInputDialog.new()")
     local dialog = YesNoDialog.new(target, customMt or commentInputDialog_mt)
     dialog.onTextEntered = commentInputDialog_callback
     dialog.callbackArgs = nil
@@ -36,7 +36,7 @@ function CommentInputDialog.new(target, customMt)
 end
 
 function CommentInputDialog.createFromExistingGui(gui, _)
-    logDebug("CommentInputDialog.createFromExistingGui()")
+    logTrace("CommentInputDialog.createFromExistingGui()")
     CommentInputDialog.register()
     local callback = gui.onTextEntered
     local target = gui.target
@@ -48,7 +48,7 @@ function CommentInputDialog.createFromExistingGui(gui, _)
 end
 
 function CommentInputDialog:onOpen()
-    logDebug("CommentInputDialog:onOpen()")
+    logTrace("CommentInputDialog:onOpen()")
     CommentInputDialog:superClass().onOpen(self)
     self.extraInputDisableTime = getPlatformId() == PlatformId.SWITCH and 0 or 100
     FocusManager:setFocus(self.textElement)
@@ -58,20 +58,20 @@ function CommentInputDialog:onOpen()
 end
 
 function CommentInputDialog:onClose()
-    logDebug("CommentInputDialog:onClose()")
+    logTrace("CommentInputDialog:onClose()")
     CommentInputDialog:superClass().onClose(self)
     if not GS_IS_CONSOLE_VERSION then self.textElement:setForcePressed(false) end
     self:updateButtonVisibility()
 end
 
 function CommentInputDialog:setText(text)
-    logDebug("CommentInputDialog:setText()")
+    logTrace("CommentInputDialog:setText()")
     CommentInputDialog:superClass().setText(self, text)
     self.inputText = text
 end
 
 function CommentInputDialog:setCallback(callback, target, text, prompt, maxCharacters, args)
-    logDebug("CommentInputDialog:setCallback()")
+    logTrace("CommentInputDialog:setCallback()")
     self.onTextEntered = callback or commentInputDialog_callback
     self.target = target
     self.callbackArgs = args
@@ -85,7 +85,7 @@ function CommentInputDialog:setCallback(callback, target, text, prompt, maxChara
 end
 
 function CommentInputDialog:sendCallback(clickOk)
-    logDebug("CommentInputDialog:sendCallback()")
+    logTrace("CommentInputDialog:sendCallback()")
     local text = self.textElement.text
     self:close()
     
@@ -97,17 +97,17 @@ function CommentInputDialog:sendCallback(clickOk)
 end
 
 function CommentInputDialog:onEnterPressed(_, dismiss)
-    logDebug("CommentInputDialog:onEnterPressed()")
+    logTrace("CommentInputDialog:onEnterPressed()")
     return dismiss and true or self:onClickOk()
 end
 
 function CommentInputDialog:onEscPressed(_)
-    logDebug("CommentInputDialog:onEscPressed()")
+    logTrace("CommentInputDialog:onEscPressed()")
     return self:onClickBack()
 end
 
 function CommentInputDialog:onClickBack(_, _)
-    logDebug("CommentInputDialog:onClickBack()")
+    logTrace("CommentInputDialog:onClickBack()")
     if self:isInputDisabled() then return true end
     
     self:sendCallback(false)
@@ -115,7 +115,7 @@ function CommentInputDialog:onClickBack(_, _)
 end
 
 function CommentInputDialog:onClickOk()
-    logDebug("CommentInputDialog:onClickOk()")
+    logTrace("CommentInputDialog:onClickOk()")
     if self:isInputDisabled() then return true end
     
     self:sendCallback(true)
@@ -124,13 +124,13 @@ function CommentInputDialog:onClickOk()
 end
 
 function CommentInputDialog:updateButtonVisibility()
-    logDebug("CommentInputDialog:updateButtonVisibility()")
+    logTrace("CommentInputDialog:updateButtonVisibility()")
     if self.yesButton ~= nil then self.yesButton:setVisible(not self.textElement.imeActive) end
     if self.noButton ~= nil then self.noButton:setVisible(not self.textElement.imeActive) end
 end
 
 function CommentInputDialog:update(dT)
-    logDebug("CommentInputDialog:update()")
+    logTrace("CommentInputDialog:update()")
     CommentInputDialog:superClass().update(self, dT)
     
     if self.reactivateNextFrame then
@@ -145,7 +145,7 @@ function CommentInputDialog:update(dT)
 end
 
 function CommentInputDialog:isInputDisabled()
-    logDebug("CommentInputDialog:isInputDisabled()")
+    logTrace("CommentInputDialog:isInputDisabled()")
     local disabled
     
     if self.extraInputDisableTime > 0 then
@@ -158,11 +158,11 @@ function CommentInputDialog:isInputDisabled()
 end
 
 function CommentInputDialog:disableInputForDuration(_)
-    logDebug("CommentInputDialog:disableInputForDuration()")
+    logTrace("CommentInputDialog:disableInputForDuration()")
 end
 
 function CommentInputDialog:getIsVisible()
-    logDebug("CommentInputDialog:getIsVisible()")
+    logTrace("CommentInputDialog:getIsVisible()")
     if self.doHide then return false end
     
     return CommentInputDialog:superClass().getIsVisible(self)

@@ -1,5 +1,7 @@
-local debugEnabled = false -- Set to true to enable debug logging
-local logPrefix = "[RM_TransactionLog] "
+RmDebugEnabled = true -- Set to true to enable debug logging
+RmTraceEnabled = true -- Set to true to enable trace logging
+
+RmLogPrefix = "[RM_TransactionLog] "
 
 function logInfo(...)
     logCommon(Logging.info, ...)
@@ -14,44 +16,61 @@ function logError(...)
 end
 
 function logDebug(...)
-    if debugEnabled then
+    if RmDebugEnabled then
         logCommon(debugPrint, ...)
     end
 end
 
-function debugPrint(msg)
-    if debugEnabled then
-        print("  Debug: ".. msg )
+function logTrace(...)
+    if RmTraceEnabled then
+        logCommon(tracePrint, ...)
     end
 end
 
-function logTable(tbl, indent, maxDepth, initialIndent)
+function debugPrint(msg)
+    print("  Debug: ".. msg )
+end
+
+function tracePrint(msg)
+    print("  Trace: ".. msg )
+end
+
+function tableToString(tbl, indent, maxDepth, initialIndent)
     indent = indent or 0
     maxDepth = maxDepth or 2
     initialIndent = initialIndent or indent
+    local result = {}
+    
     if (indent - initialIndent) >= maxDepth then
-        print(string.rep("  ", indent) .. "...")
-        return
+        table.insert(result, string.rep("  ", indent) .. "...")
+        return table.concat(result, "\n")
     end
+    
     for k, v in pairs(tbl) do
         local formatting = string.rep("  ", indent) .. tostring(k) .. ": "
         if type(v) == "table" then
-            print(formatting)
-            logTable(v, indent + 1, maxDepth, initialIndent)
+            table.insert(result, formatting)
+            table.insert(result, tableToString(v, indent + 1, maxDepth, initialIndent))
         else
-            logDebug(formatting .. tostring(v))
+            table.insert(result, formatting .. tostring(v))
         end
     end
+    
+    return table.concat(result, "\n")
 end
 
-function logFunctionParameters(...)
+function functionParametersToString(...)
     local args = {...}
+    local result = {}
+    
     for i, v in ipairs(args) do
-        logDebug(string.format("Parameter %d: (%s) %s", i, type(v), tostring(v)))
+        table.insert(result, string.format("Parameter %d: (%s) %s", i, type(v), tostring(v)))
         if type(v) == "table" then
-            logTable(v, 2)
+            table.insert(result, tableToString(v, 0, 2))
         end
     end
+    
+    return table.concat(result, "\n")
 end
 
 
@@ -74,7 +93,7 @@ function logCommon(logFunc, ...)
             end
             v = table.concat(parts, ", ")
         end
-        logFunc(logPrefix .. tostring(v))
+        logFunc(RmLogPrefix .. tostring(v))
     end
 end
 
