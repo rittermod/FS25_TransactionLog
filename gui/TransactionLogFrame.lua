@@ -41,7 +41,7 @@ function TransactionLogFrame:onOpen()
     TransactionLogFrame:superClass().onOpen(self)
     
     -- Get transactions from the main transaction log
-    if RM_TransactionLog and RM_TransactionLog.transactions then
+    if RM_TransactionLog.transactions then
         self.transactions = RM_TransactionLog.transactions
     else
         self.transactions = {}

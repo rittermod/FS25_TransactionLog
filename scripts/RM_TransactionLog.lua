@@ -112,7 +112,7 @@ function RM_TransactionLog:saveToXmlFile()
 end
 
 function RM_TransactionLog:loadFromXMLFile()
-    if not g_currentMission or not g_currentMission.missionInfo or not g_currentMission.missionInfo.savegameDirectory then
+    if not g_currentMission or not g_currentMission.missionInfo.savegameDirectory then
         logWarning("No current savegameDirectory available. No transactions to load. Ignore this if you are loading a new game.")
         return
     end
