@@ -7,7 +7,7 @@ the game. Singleplayer only.
 This mod is currently in an early stage of development. It may not work as expected and could potentially cause issues with your game.
 Since there is no proper documentation for modding FS25 yet, this mod is made by trial and error and looking at other mods.
 
-Default key binding is `Right Shift + M` to open the transaction log interface. You can change this in the game settings under "Controls".
+Default key binding is `Right Shift + T` to open the transaction log interface. You can change this in the game settings under "Controls".
 
 Landscaping creates a lot of small transactions. Using a free landscaping mod is recommended.
 
