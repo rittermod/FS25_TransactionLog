@@ -17,8 +17,11 @@ RM_TransactionLog.dir = g_currentModDirectory
 source(RM_TransactionLog.dir .. "gui/TransactionLogFrame.lua")
 source(RM_TransactionLog.dir .. "gui/CommentInputDialog.lua")
 source(RM_TransactionLog.dir .. "scripts/RM_Utils.lua")
+source(RM_TransactionLog.dir .. "scripts/RM_TransactionBatcher.lua")
 
-function RM_TransactionLog.logTransaction(amount, farmId, moneyTypeTitle, moneyTypeStatistic, currentFarmBalance)
+
+
+function RM_TransactionLog.logTransaction(amount, farmId, moneyTypeTitle, moneyTypeStatistic, currentFarmBalance, comment)
     -- Parameter validation
     if amount == nil then
         RmUtils.logWarning("logTransaction called with nil amount")
@@ -29,11 +32,11 @@ function RM_TransactionLog.logTransaction(amount, farmId, moneyTypeTitle, moneyT
         return
     end
     
-    if math.abs(amount) < RM_TransactionLog.MIN_TRANSACTION_THRESHOLD then
-        -- Ignore transactions that are very small, typically land flattening etc
-        RmUtils.logDebug("Transaction amount is too small, ignoring: " .. tostring(amount))
-        return
-    end
+    -- if math.abs(amount) < RM_TransactionLog.MIN_TRANSACTION_THRESHOLD then
+    --     -- Ignore transactions that are very small, typically land flattening etc
+    --     RmUtils.logDebug("Transaction amount is too small, ignoring: " .. tostring(amount))
+    --     return
+    -- end
 
     -- Convert the ingame datetime to a calender datetime.
     -- Adjust month to be 1-12 range. Periods starts in march, so we add 2 to align with the calendar.
@@ -61,7 +64,7 @@ function RM_TransactionLog.logTransaction(amount, farmId, moneyTypeTitle, moneyT
         transactionType = g_i18n:getText(moneyTypeTitle) or moneyTypeTitle,
         transactionStatistic = g_i18n:getText("finance_"..moneyTypeStatistic) or moneyTypeStatistic,
         currentFarmBalance = currentFarmBalance or 0,
-        comment = "",
+        comment = comment or "",
     }
 
     table.insert(RM_TransactionLog.transactions, transaction)
@@ -104,7 +107,8 @@ function RM_TransactionLog.changeFarmBalance(self, amount, moneyType, ...)
     local currentEquity = self:getEquity()
     RmUtils.logDebug(string.format("Current farm equity before change: %.2f", currentEquity))
 
-    RM_TransactionLog.logTransaction(amount, "farm-"..self.farmId, moneyType.title, moneyType.statistic, currentBalance)
+    -- Use batching system instead of direct logging
+    RM_TransactionBatcher.addToBatch(amount, "farm-"..self.farmId, moneyType.title, moneyType.statistic, currentBalance, RM_TransactionLog.logTransaction)
 
 end
 
@@ -243,7 +247,8 @@ function RM_TransactionLog.addMoney(self, amount, farmId, moneyType, ...)
    local currentBalance = currentFarm and currentFarm:getBalance() or 0
    RmUtils.logDebug(string.format("Current farm balance after change: %.2f", currentBalance))
 
-   RM_TransactionLog.logTransaction(amount, "mission-"..farmId, moneyType.title, moneyType.statistic, currentBalance)
+   -- Use batching system instead of direct logging
+   RM_TransactionBatcher.addToBatch(amount, "mission-"..farmId, moneyType.title, moneyType.statistic, currentBalance, RM_TransactionLog.logTransaction)
 
 end
 
@@ -257,6 +262,13 @@ function RM_TransactionLog.currentMissionStarted()
        return
    end
    g_currentMission.addMoney = Utils.appendedFunction(g_currentMission.addMoney, RM_TransactionLog.addMoney)
+   
+   -- Hook into mission update for batch processing
+   if g_currentMission.update then
+       g_currentMission.update = Utils.appendedFunction(g_currentMission.update, function()
+           RM_TransactionBatcher.updateBatches(RM_TransactionLog.logTransaction)
+       end)
+   end
 end
 
 
