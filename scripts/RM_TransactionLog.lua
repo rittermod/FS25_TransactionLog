@@ -195,6 +195,10 @@ function RM_TransactionLog:addMoney(amount, farmId, moneyType, ...)
     -- amount, farmId, moneyType, addMoneyChange, forceShowMoneyChange
    logTrace("g_currentMission:addMoney called with:")
    logTrace(functionParametersToString(amount, farmId, moneyType, ...))
+   if farmId ~= g_currentMission:getFarmId() then
+       logDebug("addMoney called with farmId: " .. tostring(farmId) .. ", but current farmId is: " .. tostring(g_currentMission:getFarmId()))
+       return
+   end
 
    local currentBalance = g_currentMission.cacheFarm.money 
 
