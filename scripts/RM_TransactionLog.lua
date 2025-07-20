@@ -200,7 +200,8 @@ function RM_TransactionLog:addMoney(amount, farmId, moneyType, ...)
        return
    end
 
-   local currentBalance = g_currentMission.cacheFarm.money 
+   local currentBalance = g_farmManager:getFarmById(g_currentMission:getFarmId()) and g_farmManager:getFarmById(g_currentMission:getFarmId()):getBalance() or 0
+   logDebug(string.format("Current farm balance after change: %.2f", currentBalance))
 
    RM_TransactionLog:logTransaction(amount, "mission-"..farmId, moneyType.title, moneyType.statistic, currentBalance)
 
