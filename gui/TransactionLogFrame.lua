@@ -7,6 +7,10 @@ local TransactionLogFrame_mt = Class(TransactionLogFrame, MessageDialog)
 -- Constants
 TransactionLogFrame.MAX_COMMENT_LENGTH = 200  -- Maximum characters allowed in comment input
 
+-- UI Color constants (cached for performance)
+TransactionLogFrame.POSITIVE_COLOR = {0, 0.8, 0, 1}      -- Darker green for positive amounts
+TransactionLogFrame.NEGATIVE_COLOR = {0.9, 0.2, 0.2, 1}  -- Darker red for negative amounts
+
 TransactionLogFrame.CONTROLS = {
     "transactionTable",
     "tableSlider",
@@ -18,31 +22,35 @@ TransactionLogFrame.CONTROLS = {
 }
 
 function TransactionLogFrame.new(target, custom_mt)
-    logTrace("TransactionLogFrame:new()")
+    RmUtils.logTrace("TransactionLogFrame:new()")
     local self = MessageDialog.new(target, custom_mt or TransactionLogFrame_mt)
     self.transactions = {}
     return self
 end
 
 function TransactionLogFrame:onGuiSetupFinished()
-    logTrace("TransactionLogFrame:onGuiSetupFinished()")
+    RmUtils.logTrace("TransactionLogFrame:onGuiSetupFinished()")
     TransactionLogFrame:superClass().onGuiSetupFinished(self)
     self.transactionTable:setDataSource(self)
     self.transactionTable:setDelegate(self)
 end
 
 function TransactionLogFrame:onCreate()
-    logTrace("TransactionLogFrame:onCreate()")
+    RmUtils.logTrace("TransactionLogFrame:onCreate()")
     TransactionLogFrame:superClass().onCreate(self)
 end
 
 function TransactionLogFrame:onOpen()
-    logTrace("TransactionLogFrame:onOpen()")
+    RmUtils.logTrace("TransactionLogFrame:onOpen()")
     TransactionLogFrame:superClass().onOpen(self)
     
     -- Get transactions from the main transaction log
     if RM_TransactionLog.transactions then
         self.transactions = RM_TransactionLog.transactions
+        -- Sort transactions by in-game time, newest first
+        table.sort(self.transactions, function(a, b)
+            return (a.ingameDateTime or "") > (b.ingameDateTime or "")
+        end)
     else
         self.transactions = {}
     end
@@ -60,7 +68,7 @@ function TransactionLogFrame:onOpen()
 end
 
 function TransactionLogFrame:onClose()
-    logTrace("TransactionLogFrame:onClose()")
+    RmUtils.logTrace("TransactionLogFrame:onClose()")
     self.transactions = {}
     TransactionLogFrame:superClass().onClose(self)
 end
@@ -93,9 +101,9 @@ function TransactionLogFrame:populateCellForItemInSection(list, section, index, 
             
             -- Set color based on positive/negative amount
             if amount >= 0 then
-                amountElement.textColor = {0, 0.8, 0, 1} -- Darker green for positive
+                amountElement.textColor = TransactionLogFrame.POSITIVE_COLOR
             else
-                amountElement.textColor = {0.9, 0.2, 0.2, 1} -- Darker red for negative with better contrast
+                amountElement.textColor = TransactionLogFrame.NEGATIVE_COLOR
             end
             
             -- Format and display farm balance
@@ -106,9 +114,9 @@ function TransactionLogFrame:populateCellForItemInSection(list, section, index, 
             
             -- Set color based on positive/negative balance
             if balance >= 0 then
-                balanceElement.textColor = {0, 0.8, 0, 1} -- Darker green for positive
+                balanceElement.textColor = TransactionLogFrame.POSITIVE_COLOR
             else
-                balanceElement.textColor = {0.9, 0.2, 0.2, 1} -- Darker red for negative with better contrast
+                balanceElement.textColor = TransactionLogFrame.NEGATIVE_COLOR
             end
             
             cell:getAttribute("comment"):setText(transaction.comment or "")
@@ -118,17 +126,17 @@ end
 
 -- Button handlers
 function TransactionLogFrame:onClickClose()
-    logTrace("TransactionLogFrame:onClickClose()")
+    RmUtils.logTrace("TransactionLogFrame:onClickClose()")
     self:close()
 end
 
 function TransactionLogFrame:onClickAddComment()
-    logTrace("TransactionLogFrame:onClickAddComment()")
+    RmUtils.logTrace("TransactionLogFrame:onClickAddComment()")
     
     -- Get the selected transaction
     local selectedIndex = self.transactionTable.selectedIndex
     if selectedIndex == nil or selectedIndex < 1 or selectedIndex > #self.transactions then
-        logWarning("No transaction selected or invalid selection")
+        RmUtils.logWarning("No transaction selected or invalid selection")
         return
     end
     
@@ -146,7 +154,7 @@ function TransactionLogFrame:onClickAddComment()
                 self.transactions[selectedIndex].comment = text
                 self.transactionTable:reloadData()
                 
-                logDebug(string.format("Comment updated for transaction: %s", text))
+                RmUtils.logDebug(string.format("Comment updated for transaction: %s", text))
             end
         end
         
@@ -158,7 +166,7 @@ function TransactionLogFrame:onClickAddComment()
 end
 
 function TransactionLogFrame:onClickClearLog()
-    logTrace("TransactionLogFrame:onClickClearLog()")
+    RmUtils.logTrace("TransactionLogFrame:onClickClearLog()")
     
     -- Show confirmation dialog
     local confirmationText = string.format(g_i18n:getText("ui_transaction_log_clear_confirmation"), #self.transactions)
@@ -177,13 +185,13 @@ function TransactionLogFrame:onYesNoClearLog(yes)
             self.totalTransactionsValue:setText("0")
             self.transactionTable:reloadData()
             
-            logInfo("Transaction log cleared via GUI")
+            RmUtils.logInfo("Transaction log cleared via GUI")
         end
     end
 end
 
 function TransactionLogFrame:onClickExportCSV()
-    logTrace("TransactionLogFrame:onClickExportCSV()")
+    RmUtils.logTrace("TransactionLogFrame:onClickExportCSV()")
     
     if #self.transactions == 0 then
         InfoDialog.show(g_i18n:getText("ui_transaction_log_export_no_data"))
@@ -194,6 +202,16 @@ function TransactionLogFrame:onClickExportCSV()
     local savegameFolderPath = g_currentMission.missionInfo.savegameDirectory .. "/"
     local csvFileName = "transaction_log.csv"
     local csvFilePath = savegameFolderPath .. csvFileName
+    
+    -- Helper function to escape CSV fields (moved outside loop for performance)
+    local function escapeCSVField(field)
+        if string.find(field, '[,"]') then
+            -- Replace quotes with double quotes and wrap in quotes
+            field = string.gsub(field, '"', '""')
+            field = '"' .. field .. '"'
+        end
+        return field
+    end
     
     -- Create CSV content
     local csvContent = {}
@@ -206,24 +224,11 @@ function TransactionLogFrame:onClickExportCSV()
         local realDateTime = transaction.realDateTime or ""
         local ingameDateTime = transaction.ingameDateTime or ""
         local farmId = tostring(transaction.farmId or "")
-        local transactionType = transaction.transactionType or ""
+        local transactionType = escapeCSVField(transaction.transactionType or "")
         local transactionStatistic = transaction.transactionStatistic or ""
-        local amount = tostring(transaction.amount or "0")
-        local balance = tostring(transaction.currentFarmBalance or "0")
-        local comment = transaction.comment or ""
-        
-        -- Escape commas and quotes in CSV fields
-        local function escapeCSVField(field)
-            if string.find(field, '[,"]') then
-                -- Replace quotes with double quotes and wrap in quotes
-                field = string.gsub(field, '"', '""')
-                field = '"' .. field .. '"'
-            end
-            return field
-        end
-
-        transactionType = escapeCSVField(transactionType)
-        comment = escapeCSVField(comment)
+        local amount = tonumber(transaction.amount) or 0
+        local balance = tonumber(transaction.currentFarmBalance) or 0
+        local comment = escapeCSVField(transaction.comment or "")
         
         local csvRow = string.format("%s,%s,%s,%s,%s,%.2f,%.2f,%s",
             realDateTime, ingameDateTime, farmId, transactionType, transactionStatistic, amount, balance, comment)
@@ -236,26 +241,26 @@ function TransactionLogFrame:onClickExportCSV()
     if file then
         file:write(csvText)
         file:close()
-        logInfo(string.format("Exported %d transactions to CSV: %s", #self.transactions, csvFilePath))
+        RmUtils.logInfo(string.format("Exported %d transactions to CSV: %s", #self.transactions, csvFilePath))
         
         -- Show confirmation dialog with file path
         local confirmationText = string.format(g_i18n:getText("ui_transaction_log_export_success"), #self.transactions, "savegameX/"..csvFileName)
         InfoDialog.show(confirmationText)
     else
-        logError("Failed to create CSV file: " .. csvFilePath)
+        RmUtils.logError("Failed to create CSV file: " .. csvFilePath)
         InfoDialog.show(g_i18n:getText("ui_transaction_log_export_error"))
     end
 end
 
 function TransactionLogFrame.register()
-    logTrace("TransactionLogFrame.register()")
+    RmUtils.logTrace("TransactionLogFrame.register()")
     local dialog = TransactionLogFrame.new(g_i18n)
     g_gui:loadGui(RM_TransactionLog.dir .. "gui/TransactionLogFrame.xml", "TransactionLogFrame", dialog)
 end
 
 -- Static function to show the transaction log dialog
 function TransactionLogFrame.showTransactionLog()
-    logTrace("TransactionLogFrame.showTransactionLog()")
+    RmUtils.logTrace("TransactionLogFrame.showTransactionLog()")
     
     -- Create and show the dialog
     local dialog = TransactionLogFrame.new()
