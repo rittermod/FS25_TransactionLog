@@ -82,6 +82,7 @@ function TransactionLogFrame:populateCellForItemInSection(list, section, index, 
             cell:getAttribute("ingameDateTime"):setText(transaction.ingameDateTime or g_i18n:getText("ui_transaction_log_no_data"))
             cell:getAttribute("farmId"):setText(tostring(transaction.farmId or g_i18n:getText("ui_transaction_log_no_data")))
             cell:getAttribute("transactionType"):setText(transaction.transactionType or g_i18n:getText("ui_transaction_log_no_data"))
+            cell:getAttribute("transactionStatistic"):setText(transaction.transactionStatistic or g_i18n:getText("ui_transaction_log_no_data"))
             
             -- Format amount with currency symbol and color
             local amount = transaction.amount or 0
@@ -198,7 +199,7 @@ function TransactionLogFrame:onClickExportCSV()
     local csvContent = {}
     
     -- Add CSV header
-    table.insert(csvContent, "Real DateTime,In-game DateTime,Farm ID,Transaction Type,Amount,Balance,Comment")
+    table.insert(csvContent, "Real DateTime,In-game DateTime,Farm ID,Type,Income/Expenditure,Amount,Balance,Comment")
     
     -- Add transaction data
     for _, transaction in ipairs(self.transactions) do
@@ -206,6 +207,7 @@ function TransactionLogFrame:onClickExportCSV()
         local ingameDateTime = transaction.ingameDateTime or ""
         local farmId = tostring(transaction.farmId or "")
         local transactionType = transaction.transactionType or ""
+        local transactionStatistic = transaction.transactionStatistic or ""
         local amount = tostring(transaction.amount or "0")
         local balance = tostring(transaction.currentFarmBalance or "0")
         local comment = transaction.comment or ""
@@ -223,8 +225,8 @@ function TransactionLogFrame:onClickExportCSV()
         transactionType = escapeCSVField(transactionType)
         comment = escapeCSVField(comment)
         
-        local csvRow = string.format("%s,%s,%s,%s,%.2f,%.2f,%s",
-            realDateTime, ingameDateTime, farmId, transactionType, amount, balance, comment)
+        local csvRow = string.format("%s,%s,%s,%s,%s,%.2f,%.2f,%s",
+            realDateTime, ingameDateTime, farmId, transactionType, transactionStatistic, amount, balance, comment)
         table.insert(csvContent, csvRow)
     end
     

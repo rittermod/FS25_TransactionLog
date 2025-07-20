@@ -42,7 +42,7 @@ function RM_TransactionLog:logTransaction(amount, farmId, moneyTypeTitle, moneyT
         farmId = farmId,
         amount = amount,
         transactionType = g_i18n:getText(moneyTypeTitle) or moneyTypeTitle,
-        transactionStatistic = moneyTypeStatistic,
+        transactionStatistic = g_i18n:getText("finance_"..moneyTypeStatistic) or moneyTypeStatistic,
         currentFarmBalance = currentFarmBalance or 0,
         comment = "",
     }
