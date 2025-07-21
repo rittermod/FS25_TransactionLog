@@ -2,7 +2,7 @@ RM_TransactionLog = {}
 local RM_TransactionLog_mt = Class(RM_TransactionLog)
 
 -- Constants
-RM_TransactionLog.MIN_TRANSACTION_THRESHOLD = 0.01  -- Minimum transaction amount to log
+-- RM_TransactionLog.MIN_TRANSACTION_THRESHOLD = 0.01  -- Minimum transaction amount to log (not used currently, but can be uncommented if needed)
 
 -- Table to store transactions (module level for compatibility)
 RM_TransactionLog.transactions = {}
@@ -231,35 +231,35 @@ end
 
 
 
-function RM_TransactionLog.addMoney(self, amount, farmId, moneyType, ...)
-    -- amount, farmId, moneyType, addMoneyChange, forceShowMoneyChange
-   RmUtils.logTrace("g_currentMission:addMoney called with:")
-   RmUtils.logTrace(RmUtils.functionParametersToString(amount, farmId, moneyType, ...))
+-- function RM_TransactionLog.addMoney(self, amount, farmId, moneyType, ...)
+--     -- amount, farmId, moneyType, addMoneyChange, forceShowMoneyChange
+--    RmUtils.logTrace("g_currentMission:addMoney called with:")
+--    RmUtils.logTrace(RmUtils.functionParametersToString(amount, farmId, moneyType, ...))
    
-   -- Parameter validation
-   if amount == nil then
-       RmUtils.logWarning("addMoney called with nil amount")
-       return
-   end
-   if farmId == nil then
-       RmUtils.logWarning("addMoney called with nil farmId")
-       return
-   end
+--    -- Parameter validation
+--    if amount == nil then
+--        RmUtils.logWarning("addMoney called with nil amount")
+--        return
+--    end
+--    if farmId == nil then
+--        RmUtils.logWarning("addMoney called with nil farmId")
+--        return
+--    end
    
-   if farmId ~= g_currentMission:getFarmId() then
-       RmUtils.logDebug("addMoney called with farmId: " .. tostring(farmId) .. ", but current farmId is: " .. tostring(g_currentMission:getFarmId()))
-       return
-   end
+--    if farmId ~= g_currentMission:getFarmId() then
+--        RmUtils.logDebug("addMoney called with farmId: " .. tostring(farmId) .. ", but current farmId is: " .. tostring(g_currentMission:getFarmId()))
+--        return
+--    end
 
-   -- Cache expensive lookup to avoid duplicate calls
-   local currentFarm = g_farmManager:getFarmById(g_currentMission:getFarmId())
-   local currentBalance = currentFarm and currentFarm:getBalance() or 0
-   RmUtils.logDebug(string.format("Current farm balance after change: %.2f", currentBalance))
+--    -- Cache expensive lookup to avoid duplicate calls
+--    local currentFarm = g_farmManager:getFarmById(g_currentMission:getFarmId())
+--    local currentBalance = currentFarm and currentFarm:getBalance() or 0
+--    RmUtils.logDebug(string.format("Current farm balance after change: %.2f", currentBalance))
 
-   -- Use batching system instead of direct logging
-   RM_TransactionBatcher.addToBatch(amount, "mission-"..farmId, moneyType.title, moneyType.statistic, currentBalance, RM_TransactionLog.logTransaction)
+--    -- Use batching system instead of direct logging
+--    RM_TransactionBatcher.addToBatch(amount, "mission-"..farmId, moneyType.title, moneyType.statistic, currentBalance, RM_TransactionLog.logTransaction)
 
-end
+-- end
 
 function RM_TransactionLog.currentMissionStarted()
    RmUtils.logDebug("Current mission started")
@@ -270,7 +270,8 @@ function RM_TransactionLog.currentMissionStarted()
        RmUtils.logError("g_currentMission.addMoney is nil, cannot append function.")
        return
    end
-   g_currentMission.addMoney = Utils.appendedFunction(g_currentMission.addMoney, RM_TransactionLog.addMoney)
+   -- hopefully this wil not be needed. Seems all transactions are logged through  farm.changeBalance
+   -- g_currentMission.addMoney = Utils.appendedFunction(g_currentMission.addMoney, RM_TransactionLog.addMoney)
    
    -- Hook into mission update for batch processing
    if g_currentMission.update then
