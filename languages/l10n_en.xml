@@ -5,8 +5,6 @@
 		<text name="input_RM_SHOW_TRANSACTION_LOG" text="Show transaction log"/>
 		<text name="ui_transaction_log_title" text="Transaction Log"/>
 		<text name="ui_header_datetime" text="Date/Time"/>
-		<text name="ui_header_farm_id" text="Farm ID"/>
-		<text name="ui_header_transaction_type" text="Type"/>
 		<text name="ui_header_income_expenditure" text="Income/Expenditure"/>
 		<text name="ui_header_amount" text="Amount"/>
 		<text name="ui_header_balance" text="Balance"/>

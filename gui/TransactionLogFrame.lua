@@ -88,8 +88,6 @@ function TransactionLogFrame:populateCellForItemInSection(list, section, index, 
         if transaction then
             -- Set transaction data in the cell
             cell:getAttribute("ingameDateTime"):setText(transaction.ingameDateTime or g_i18n:getText("ui_transaction_log_no_data"))
-            cell:getAttribute("farmId"):setText(tostring(transaction.farmId or g_i18n:getText("ui_transaction_log_no_data")))
-            cell:getAttribute("transactionType"):setText(transaction.transactionType or g_i18n:getText("ui_transaction_log_no_data"))
             cell:getAttribute("transactionStatistic"):setText(transaction.transactionStatistic or g_i18n:getText("ui_transaction_log_no_data"))
             
             -- Format amount with currency symbol and color

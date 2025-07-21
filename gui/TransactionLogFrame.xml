@@ -12,15 +12,12 @@
             <Bitmap profile="dialogTableList" id="tableHeaderBox" position="45px -80px" size="1270px 50px">
                 <Text profile="dialogTableHeaderLeftAligned" position="15px -0px" size="140px 40.77px"
                       text="$l10n_ui_header_datetime"/>
-                <Text profile="dialogTableHeaderRightAligned" position="175px -0px" size="70px 40.77px" text="$l10n_ui_header_farm_id"/>
-                <Text profile="dialogTableHeaderLeftAligned" position="265px -0px" size="130px 40.77px"
-                      text="$l10n_ui_header_transaction_type"/>
-                <Text profile="dialogTableHeaderLeftAligned" position="415px -0px" size="130px 40.77px"
+                <Text profile="dialogTableHeaderLeftAligned" position="175px -0px" size="230px 40.77px"
                       text="$l10n_ui_header_income_expenditure"/>
-                <Text profile="dialogTableHeaderRightAligned" position="565px -0px" size="115px 40.77px" text="$l10n_ui_header_amount"/>
-                <Text profile="dialogTableHeaderRightAligned" position="700px -0px" size="115px 40.77px"
+                <Text profile="dialogTableHeaderRightAligned" position="425px -0px" size="115px 40.77px" text="$l10n_ui_header_amount"/>
+                <Text profile="dialogTableHeaderRightAligned" position="560px -0px" size="115px 40.77px"
                       text="$l10n_ui_header_balance"/>
-                <Text profile="dialogTableHeaderLeftAligned" position="835px -0px" size="330px 40.77px" text="$l10n_ui_header_comment"/>
+                <Text profile="dialogTableHeaderLeftAligned" position="695px -0px" size="470px 40.77px" text="$l10n_ui_header_comment"/>
                 <ThreePartBitmap profile="fs25_lineSeparatorBottom" position="0px 2px"/>
             </Bitmap>
 
@@ -30,17 +27,13 @@
                 <ListItem profile="dialogTableListItem" name="transactionRowTemplate" size="1250px 40.77px">
                     <Text profile="dialogTableRowCellLeftAligned" position="15px 0px" size="140px 40.77px"
                           name="ingameDateTime" textLayoutMode="scrolling"/>
-                    <Text profile="dialogTableRowCellRightAligned" position="175px 0px" size="70px 40.77px"
-                          name="farmId"/>
-                    <Text profile="dialogTableRowCellLeftAligned" position="265px 0px" size="130px 40.77px"
-                          name="transactionType" textLayoutMode="scrolling"/>
-                    <Text profile="dialogTableRowCellLeftAligned" position="415px 0px" size="130px 40.77px"
+                    <Text profile="dialogTableRowCellLeftAligned" position="175px 0px" size="230px 40.77px"
                           name="transactionStatistic" textLayoutMode="scrolling"/>
-                    <Text profile="dialogTableRowCellRightAligned" position="565px 0px" size="115px 40.77px"
+                    <Text profile="dialogTableRowCellRightAligned" position="425px 0px" size="115px 40.77px"
                           name="amount"/>
-                    <Text profile="dialogTableRowCellRightAligned" position="700px 0px" size="115px 40.77px"
+                    <Text profile="dialogTableRowCellRightAligned" position="560px 0px" size="115px 40.77px"
                           name="balance"/>
-                    <Text profile="dialogTableRowCellLeftAligned" position="835px 0px" size="330px 40.77px"
+                    <Text profile="dialogTableRowCellLeftAligned" position="695px 0px" size="470px 40.77px"
                           name="comment"
                           textLayoutMode="scrolling"/>
                 </ListItem>
