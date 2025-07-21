@@ -120,7 +120,7 @@ function RM_TransactionLog.saveToXmlFile()
     end
     local savegameFolderPath = g_currentMission.missionInfo.savegameDirectory .. "/"
     local rootKey = "RM_TransactionLog"
-    local xmlFile = createXMLFile(rootKey, savegameFolderPath .. "transaction_log.xml", rootKey);
+    local xmlFile = createXMLFile(rootKey, savegameFolderPath .. "tl_transactions.xml", rootKey);
     if xmlFile == nil then
         RmUtils.logError("Failed to create XML file for transaction log.")
         return
@@ -140,7 +140,7 @@ function RM_TransactionLog.saveToXmlFile()
     end
 
     saveXMLFile(xmlFile);
-    RmUtils.logInfo(string.format("Saved %d transactions to transaction_log.xml.", i))
+    RmUtils.logInfo(string.format("Saved %d transactions to tl_transactions.xml.", i))
     delete(xmlFile);
 end
 
@@ -150,15 +150,15 @@ function RM_TransactionLog.loadFromXMLFile()
         return
     end
     local savegameFolderPath = g_currentMission.missionInfo.savegameDirectory .. "/"
-    if not fileExists(savegameFolderPath .. "transaction_log.xml") then
-        RmUtils.logWarning("No transaction log XML file found at path:", savegameFolderPath .. "transaction_log.xml")
+    if not fileExists(savegameFolderPath .. "tl_transactions.xml") then
+        RmUtils.logWarning("No transaction log XML file found at path:", savegameFolderPath .. "tl_transactions.xml")
         RmUtils.logWarning("No transactions to load. Ignore this if it is the first time loading savegame with this mod or you have just cleared the log.")
         return
     end
 
-    local xmlFile = loadXMLFile("RM_TransactionLog", savegameFolderPath .. "transaction_log.xml")
+    local xmlFile = loadXMLFile("RM_TransactionLog", savegameFolderPath .. "tl_transactions.xml")
     if xmlFile == nil then
-        RmUtils.logError("Could not load transaction log XML file:", savegameFolderPath .. "transaction_log.xml")
+        RmUtils.logError("Could not load transaction log XML file:", savegameFolderPath .. "tl_transactions.xml")
         return
     end
 
@@ -192,6 +192,10 @@ end
 
 function RM_TransactionLog.loadMap()
     RmUtils.logDebug("Mod loaded!")
+    local modSettingsDir = g_modSettingsDirectory and (g_modSettingsDirectory .. "/FS25_TransactionLog") or nil
+    if modSettingsDir then
+        createFolder(modSettingsDir)
+    end
     -- Append the mod's save function to the existing savegame function
     FSBaseMission.saveSavegame = Utils.appendedFunction(FSBaseMission.saveSavegame, RM_TransactionLog.saveToXmlFile)
     -- Load existing transactions from XML file

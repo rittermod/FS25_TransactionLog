@@ -27,7 +27,9 @@
 		<text name="ui_transaction_log_clear_yes" text="Clear Log"/>
 		<text name="ui_transaction_log_clear_no" text="Cancel"/>
 		<text name="ui_transaction_log_export_no_data" text="No transactions to export."/>
-		<text name="ui_transaction_log_export_success" text="Successfully exported %d transactions to: %s"/>
+		<text name="ui_transaction_log_export_success" text="Successfully exported %d transactions to 
+file %s
+in folder %s"/>
 		<text name="ui_transaction_log_export_error" text="Failed to export transactions to CSV file."/>
 		<text name="finance_loan" text="Loan"/>
 	</texts>

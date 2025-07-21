@@ -198,10 +198,22 @@ function TransactionLogFrame:onClickExportCSV()
         return
     end
     
-    -- Get the savegame folder path (same as XML file)
-    local savegameFolderPath = g_currentMission.missionInfo.savegameDirectory .. "/"
-    local csvFileName = "transaction_log.csv"
-    local csvFilePath = savegameFolderPath .. csvFileName
+    -- Get the modSettings folder path with validation
+    local modSettingsDir = g_modSettingsDirectory and (g_modSettingsDirectory .. "FS25_TransactionLog/") or nil
+    if not modSettingsDir or modSettingsDir == "" then
+        RmUtils.logError("g_modSettingsDirectory not available, falling back to savegame directory")
+        modSettingsDir = g_currentMission.missionInfo.savegameDirectory
+        if not modSettingsDir or modSettingsDir == "" then
+            RmUtils.logError("No valid directory available for CSV export")
+            InfoDialog.show(g_i18n:getText("ui_transaction_log_export_error"))
+            return
+        end
+    end
+    
+    local savegameIndex = g_currentMission.missionInfo.savegameIndex or 0
+    local timestamp = getDate("%Y%m%d%H%M%S")
+    local csvFileName = string.format("tl_transactions_sg%02d_%s.csv", savegameIndex, timestamp)
+    local csvFilePath = modSettingsDir .. csvFileName
     
     -- Helper function to escape CSV fields (moved outside loop for performance)
     local function escapeCSVField(field)
@@ -244,7 +256,16 @@ function TransactionLogFrame:onClickExportCSV()
         RmUtils.logInfo(string.format("Exported %d transactions to CSV: %s", #self.transactions, csvFilePath))
         
         -- Show confirmation dialog with file path
-        local confirmationText = string.format(g_i18n:getText("ui_transaction_log_export_success"), #self.transactions, "savegameX/"..csvFileName)
+        -- Extract path from /modSettings/ or /savegame onwards for display
+        local displayPath = modSettingsDir
+        local modSettingsIndex = string.find(displayPath, "/modSettings/")
+        local savegameIndex = string.find(displayPath, "/savegame")
+        if modSettingsIndex then
+            displayPath = string.sub(displayPath, modSettingsIndex)
+        elseif savegameIndex then
+            displayPath = string.sub(displayPath, savegameIndex)
+        end
+        local confirmationText = string.format(g_i18n:getText("ui_transaction_log_export_success"), #self.transactions, csvFileName, displayPath)
         InfoDialog.show(confirmationText)
     else
         RmUtils.logError("Failed to create CSV file: " .. csvFilePath)
