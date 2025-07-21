@@ -113,8 +113,12 @@ function RM_TransactionLog.changeFarmBalance(self, amount, moneyType, ...)
     local currentEquity = self:getEquity()
     RmUtils.logDebug(string.format("Current farm equity before change: %.2f", currentEquity))
 
-    -- Use batching system instead of direct logging
-    RM_TransactionBatcher.addToBatch(amount, "farm-"..self.farmId, moneyType.title, moneyType.statistic, currentBalance, RM_TransactionLog.logTransaction)
+    -- Use batching system for batchable transactions, log others directly
+    if RM_TransactionBatcher.shouldBatch(moneyType.statistic) then
+        RM_TransactionBatcher.addToBatch(amount, self.farmId, moneyType.title, moneyType.statistic, currentBalance, RM_TransactionLog.logTransaction)
+    else
+        RM_TransactionLog.logTransaction(amount, self.farmId, moneyType.title, moneyType.statistic, currentBalance)
+    end
 
 end
 

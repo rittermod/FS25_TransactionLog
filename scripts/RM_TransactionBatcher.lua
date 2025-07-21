@@ -18,7 +18,7 @@ RM_TransactionBatcher.BATCHABLE_STATISTICS = {
     "purchaseFuel",               -- Fuel purchases
 }
 
--- Hash table for O(1) lookup performance
+-- Hash table for lookup performance
 RM_TransactionBatcher.BATCHABLE_STATISTICS_SET = {}
 for _, statistic in ipairs(RM_TransactionBatcher.BATCHABLE_STATISTICS) do
     RM_TransactionBatcher.BATCHABLE_STATISTICS_SET[statistic] = true
@@ -27,14 +27,14 @@ end
 -- Batching system state
 RM_TransactionBatcher.transactionBatches = {}  -- Active batches being collected
 RM_TransactionBatcher.batchTimers = {}         -- Timers for each batch
-RM_TransactionBatcher.activeBatchCount = 0     -- Counter for active batches (O(1) lookup)
+RM_TransactionBatcher.activeBatchCount = 0     -- Counter for active batches
 
 function RM_TransactionBatcher.new(customMt)
     local self = setmetatable({}, customMt or RM_TransactionBatcher_mt)
     return self
 end
 
--- Helper function to check if a transaction statistic should be batched (O(1) lookup)
+-- Helper function to check if a transaction statistic should be batched
 function RM_TransactionBatcher.shouldBatch(transactionStatistic)
     return RM_TransactionBatcher.BATCHABLE_STATISTICS_SET[transactionStatistic] == true
 end
@@ -44,13 +44,8 @@ function RM_TransactionBatcher.createBatchKey(farmId, transactionType, transacti
     return string.format("%s|%s|%s", farmId, transactionType, transactionStatistic)
 end
 
--- Add transaction to batch or flush immediately if not batchable
+-- Add transaction to batch (assumes caller has already checked shouldBatch)
 function RM_TransactionBatcher.addToBatch(amount, farmId, moneyTypeTitle, moneyTypeStatistic, currentFarmBalance, logFunction)
-    if not RM_TransactionBatcher.shouldBatch(moneyTypeStatistic) then
-        -- Not batchable - log immediately
-        logFunction(amount, farmId, moneyTypeTitle, moneyTypeStatistic, currentFarmBalance)
-        return
-    end
     
     local batchKey = RM_TransactionBatcher.createBatchKey(farmId, moneyTypeTitle, moneyTypeStatistic)
     RmUtils.logDebug("Adding to batch: " .. batchKey .. " amount: " .. tostring(amount))
