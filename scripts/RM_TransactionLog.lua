@@ -2,6 +2,7 @@ RM_TransactionLog = {}
 local RM_TransactionLog_mt = Class(RM_TransactionLog)
 
 -- Constants
+RM_TransactionLog.startYear = 2025  -- Start year for the transaction log (Year 1 = 2025)
 -- RM_TransactionLog.MIN_TRANSACTION_THRESHOLD = 0.01  -- Minimum transaction amount to log (not used currently, but can be uncommented if needed)
 
 -- Table to store transactions (module level for compatibility)
@@ -46,7 +47,7 @@ function RM_TransactionLog.logTransaction(amount, farmId, moneyTypeTitle, moneyT
         month = month - 12
     end
     -- Ingame year changes in March, so we need to adjust the "calendar" year
-    local year = g_currentMission.environment.currentYear
+    local year = g_currentMission.environment.currentYear + RM_TransactionLog.startYear - 1
     if month < 3 then
         year = year + 1
     end

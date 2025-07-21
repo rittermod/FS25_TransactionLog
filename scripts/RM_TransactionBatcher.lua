@@ -14,7 +14,8 @@ RM_TransactionBatcher.BATCHABLE_STATISTICS = {
     -- Add the transactionStatistic values that should be batched
     "constructionCost",           -- Landscaping costs etc
     "soldBales",                  -- Bales sold
-    "other"                       -- Transactions without a specific statistic set 
+    "other",                      -- Transactions without a specific statistic set 
+    "purchaseFuel",               -- Fuel purchases
 }
 
 -- Hash table for O(1) lookup performance
