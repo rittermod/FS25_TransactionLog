@@ -94,6 +94,11 @@ function RM_TransactionLog.changeFarmBalance(self, amount, moneyType, ...)
         RmUtils.logWarning("changeFarmBalance called with nil amount")
         return
     end
+
+    if self.farmId ~= g_currentMission:getFarmId() then
+       RmUtils.logDebug("changeFarmBalance called with farmId: " .. tostring(self.farmId) .. ", but current farmId is: " .. tostring(g_currentMission:getFarmId()))
+       return
+    end
     
     -- Log the transaction
     if moneyType == nil then
