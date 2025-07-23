@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8" standalone="no" ?>
 <modDesc descVersion="98">
     <author>Ritter</author>
-    <version>0.0.0.5</version>
+    <version>0.0.1.0</version>
     <!-- <iconFilename>icon_TransactionLog.dds</iconFilename> -->
     <title>
         <en>Transaction log</en>
@@ -10,12 +10,14 @@
         <en><![CDATA[Transaction log
 
 This mod adds a transaction log to the game, allowing you to keep track of all your financial transactions in a single place.
+It includes features such as:
+- Automatic logging of transactions
+- Transaction comments
+- Transaction export to CSV
+
 Default keybinding is Right Shift + T.
 
-Changelog:
 
-0.0.0.1:
-- Initial release of the Transaction log mod.
 
 ]]></en>
     </description>

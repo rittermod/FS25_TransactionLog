@@ -21,11 +21,4 @@ Landscaping creates a lot of small transactions. Using a free landscaping mod is
 Transaction log interface with a list of transactions, including date, type, amount, and comments.
 ![Transaction Log](screenshots/transaction_log.png)
 
-Adding a comment to a transaction.
-![Add Comment](screenshots/add_comment.png)
 
-Exporting transactions to a CSV file.
-![Export CSV](screenshots/export_to_csv.png)
-
-Clearing the transaction log.
-![Clear Log](screenshots/clear_transactions.png)
