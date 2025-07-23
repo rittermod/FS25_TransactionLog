@@ -1,21 +1,26 @@
 # FS25_TransactionLog
 
-For the micromanagers out there that want to keep track of their farm's transactions, this mod adds a transaction log to
-the game. Singleplayer only.
+For the micromanagers out there that want to keep track of their farm's transactions, 
+this mod adds a transaction log to the game. 
+
+**Singleplayer only.**
 
 ## Notes
-This mod is currently in an early stage of development. It may not work as expected and could potentially cause issues with your game.
+This mod is currently in development. It may not work as expected and could potentially cause issues with your game.
 Since there is no proper documentation for modding FS25 yet, this mod is made by trial and error and looking at other mods.
 
 Default key binding is `Right Shift + T` to open the transaction log interface. You can change this in the game settings under "Controls".
 
-Landscaping creates a lot of small transactions. Using a free landscaping mod is recommended.
 
 ## Features
-- View all transactions in a log
-- Add comments to transactions
-- Export transactions to a CSV file
-- Clear the transaction log
+ - **Transaction Logging**: Automatically tracks all financial transactions (income and expenses) in real-time
+  - **Transaction combining**: Groups frequent small transactions (landscaping, fuel purchase etc) to reduce log clutter. The list of transaction types combined is not complete at the moment.
+  - **GUI Interface**: View transaction history in an in-game dialog (accessible via RightShift+R)
+  - **Transaction Details**: Display ingame date/time, transaction type, amount, and current farm balance
+  - **Add Comments**: Edit and add custom comments to individual transactions
+  - **Export to CSV**: Export transaction history to CSV files in the mod settings directory
+  - **Clear Transaction Log**: Remove all stored transactions with confirmation dialog
+  - **Persistent Storage**: Automatically save and load transaction data with your savegame
 
 ## Screenshots
 Transaction log interface with a list of transactions, including date, type, amount, and comments.
