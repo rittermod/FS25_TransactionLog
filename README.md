@@ -14,7 +14,7 @@ Default key binding is `Right Shift + T` to open the transaction log interface. 
 
 ## Features
  - **Transaction Logging**: Automatically tracks all financial transactions (income and expenses) in real-time
-  - **Transaction combining**: Groups frequent small transactions (landscaping, fuel purchase etc) to reduce log clutter. The list of transaction types combined is not complete at the moment.
+  - **Transaction combining**: Groups frequent small transactions (landscaping, fuel purchase etc) to reduce log clutter.
   - **GUI Interface**: View transaction history in an in-game dialog (accessible via RightShift+R)
   - **Transaction Details**: Display ingame date/time, transaction type, amount, and current farm balance
   - **Add Comments**: Edit and add custom comments to individual transactions
