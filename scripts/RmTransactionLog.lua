@@ -143,7 +143,7 @@ function RmTransactionLog.saveToXmlFile()
         local transactionKey = string.format("%s.transactions.transaction(%d)", rootKey, i)
         setXMLString(xmlFile, transactionKey .. "#realDateTime", transaction.realDateTime)
         setXMLString(xmlFile, transactionKey .. "#ingameDateTime", transaction.ingameDateTime)
-        setXMLString(xmlFile, transactionKey .. "#farmId", transaction.farmId)
+        setXMLInt(xmlFile, transactionKey .. "#farmId", transaction.farmId)
         setXMLFloat(xmlFile, transactionKey .. "#amount", transaction.amount)
         setXMLString(xmlFile, transactionKey .. "#transactionType", transaction.transactionType)
         setXMLString(xmlFile, transactionKey .. "#transactionStatistic", transaction.transactionStatistic or "")
@@ -189,7 +189,7 @@ function RmTransactionLog.loadFromXMLFile()
         local transaction = {
             realDateTime = getXMLString(xmlFile, transactionKey .. "#realDateTime"),
             ingameDateTime = getXMLString(xmlFile, transactionKey .. "#ingameDateTime"),
-            farmId = getXMLString(xmlFile, transactionKey .. "#farmId"),
+            farmId = getXMLInt(xmlFile, transactionKey .. "#farmId"),
             amount = getXMLFloat(xmlFile, transactionKey .. "#amount"),
             transactionType = getXMLString(xmlFile, transactionKey .. "#transactionType"),
             transactionStatistic = getXMLString(xmlFile, transactionKey .. "#transactionStatistic") or "",
