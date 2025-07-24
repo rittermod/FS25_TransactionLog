@@ -7,15 +7,21 @@ local RmTransactionBatcher_mt = Class(RmTransactionBatcher)
 -- Constants
 RmTransactionBatcher.BATCH_DELAY_MS = 5000  -- 5 seconds batch collection window
 RmTransactionBatcher.MAX_BATCH_COUNT = 500  -- Maximum number of transactions in a single batch
-RmTransactionBatcher.MAX_ACTIVE_BATCHES = 50  -- Maximum number of active batches
+RmTransactionBatcher.MAX_ACTIVE_BATCHES = 50  -- Maximum number of active batches, just to be safe
 
 -- Transaction statistics that should be batched (frequent small transactions)
 RmTransactionBatcher.BATCHABLE_STATISTICS = {
     -- Add the transactionStatistic values that should be batched
     "constructionCost",           -- Landscaping costs etc
-    "soldBales",                  -- Bales sold
+    "harvestIncome",              -- Income from harvesting crops
     "other",                      -- Transactions without a specific statistic set 
+    "purchaseFertilizer",         -- Fertilizer purchases
     "purchaseFuel",               -- Fuel purchases
+    "purchaseWater",              -- Water purchases
+    "soldBales",                  -- Bales sold
+    "soldMilk",                   -- Milk sold
+    "soldProducts",               -- Products sold (e.g. eggs, wool)
+    "soldWood",                   -- Wood sold
 }
 
 -- Hash table for lookup performance
