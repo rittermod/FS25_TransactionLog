@@ -278,12 +278,21 @@ function RM_TransactionLog.currentMissionStarted()
    -- hopefully this wil not be needed. Seems all transactions are logged through  farm.changeBalance
    -- g_currentMission.addMoney = Utils.appendedFunction(g_currentMission.addMoney, RM_TransactionLog.addMoney)
    
-   -- Hook into mission update for batch processing
-   if g_currentMission.update then
-       g_currentMission.update = Utils.appendedFunction(g_currentMission.update, function()
-           RM_TransactionBatcher.updateBatches(RM_TransactionLog.logTransaction)
-       end)
-   end
+   -- Register for update events to handle batch processing
+   g_currentMission:addUpdateable(RM_TransactionLog)
+end
+
+-- Update tracking for batch processing
+RM_TransactionLog.updateTimer = 0
+RM_TransactionLog.UPDATE_INTERVAL = 1000  -- Check batches every 1 second (1000ms)
+
+function RM_TransactionLog.update(self, dt)
+    RM_TransactionLog.updateTimer = RM_TransactionLog.updateTimer + dt
+    
+    if RM_TransactionLog.updateTimer >= RM_TransactionLog.UPDATE_INTERVAL then
+        RM_TransactionLog.updateTimer = 0
+        RM_TransactionBatcher.updateBatches(RM_TransactionLog.logTransaction)
+    end
 end
 
 
