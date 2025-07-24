@@ -1,7 +1,7 @@
 RmUtils = {}
 local RmUtils_mt = Class(RmUtils)
 
-local debugEnabled = true
+local debugEnabled = false
 local traceEnabled = false
 local LOG_PREFIX = "[RmTransactionLog] "
 
