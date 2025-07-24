@@ -23,7 +23,7 @@ Source code and issue tracker at https://github.com/rittermod/FS25_TransactionLo
   - **Clear Transaction Log**: Remove all stored transactions with confirmation dialog
 
 ## Installation
-1. Download the latest release (Source Code Zip) from the [GitHub releases page](https://github.com/rittermod/FS25_TransactionLog/releases/latest)
+1. Download the latest release from the [GitHub releases page](https://github.com/rittermod/FS25_TransactionLog/releases/latest)
 2. Move or copy the zip file into your Farming Simulator 2025 mods folder, typically located at:
    - Windows: `Documents/My Games/FarmingSimulator2025/mods`
    - macOS: `~/Library/Application Support/FarmingSimulator2025/mods`
