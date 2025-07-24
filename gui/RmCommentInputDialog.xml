@@ -8,9 +8,7 @@
         <ThreePartBitmap profile="fs25_dialogBgBottom"/>
         <GuiElement profile="fs25_dialogContentContainer">
             <Text profile="fs25_textInputDialogText" id="dialogTextElement" text="$l10n_ui_comment_dialog_title"/>
-            <TextInput profile="fs25_dialogTextInput" id="textElement" onEnterPressed="onEnterPressed"
-                       onEscPressed="onEscPressed" enterWhenClickOutside="false" imeTitle="" imeDescription=""
-                       imePlaceholder="">
+            <TextInput profile="fs25_dialogTextInput" id="textElement" onEnterPressed="onEnterPressed" onEscPressed="onEscPressed" enterWhenClickOutside="false" imeTitle="" imeDescription="" imePlaceholder="">
                 <ThreePartBitmap profile="fs25_textInputBg"/>
                 <Bitmap profile="fs25_dialogTextInputIconBox">
                     <Bitmap profile="fs25_dialogTextInputIcon"/>

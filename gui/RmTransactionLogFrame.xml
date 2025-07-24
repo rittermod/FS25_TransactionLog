@@ -10,48 +10,34 @@
 
             <!-- Header for transaction list -->
             <Bitmap profile="dialogTableList" id="tableHeaderBox" position="45px -80px" size="1270px 50px">
-                <Text profile="dialogTableHeaderLeftAligned" position="15px -0px" size="140px 40.77px"
-                      text="$l10n_ui_header_datetime"/>
-                <Text profile="dialogTableHeaderLeftAligned" position="175px -0px" size="230px 40.77px"
-                      text="$l10n_ui_header_income_expenditure"/>
+                <Text profile="dialogTableHeaderLeftAligned" position="15px -0px" size="140px 40.77px" text="$l10n_ui_header_datetime"/>
+                <Text profile="dialogTableHeaderLeftAligned" position="175px -0px" size="230px 40.77px" text="$l10n_ui_header_income_expenditure"/>
                 <Text profile="dialogTableHeaderRightAligned" position="425px -0px" size="115px 40.77px" text="$l10n_ui_header_amount"/>
-                <Text profile="dialogTableHeaderRightAligned" position="560px -0px" size="115px 40.77px"
-                      text="$l10n_ui_header_balance"/>
+                <Text profile="dialogTableHeaderRightAligned" position="560px -0px" size="115px 40.77px" text="$l10n_ui_header_balance"/>
                 <Text profile="dialogTableHeaderLeftAligned" position="695px -0px" size="470px 40.77px" text="$l10n_ui_header_comment"/>
                 <ThreePartBitmap profile="fs25_lineSeparatorBottom" position="0px 2px"/>
             </Bitmap>
 
             <!-- Transaction list -->
-            <SmoothList profile="dialogTableList" id="transactionTable" position="50px -135px" size="1265px 640px"
-                        focusInit="onOpen" focusChangeTop="nil" focusChangeBottom="nil">
+            <SmoothList profile="dialogTableList" id="transactionTable" position="50px -135px" size="1265px 640px" focusInit="onOpen" focusChangeTop="nil" focusChangeBottom="nil">
                 <ListItem profile="dialogTableListItem" name="transactionRowTemplate" size="1250px 40.77px">
-                    <Text profile="dialogTableRowCellLeftAligned" position="15px 0px" size="140px 40.77px"
-                          name="ingameDateTime" textLayoutMode="scrolling"/>
-                    <Text profile="dialogTableRowCellLeftAligned" position="175px 0px" size="230px 40.77px"
-                          name="transactionStatistic" textLayoutMode="scrolling"/>
-                    <Text profile="dialogTableRowCellRightAligned" position="425px 0px" size="115px 40.77px"
-                          name="amount"/>
-                    <Text profile="dialogTableRowCellRightAligned" position="560px 0px" size="115px 40.77px"
-                          name="balance"/>
-                    <Text profile="dialogTableRowCellLeftAligned" position="695px 0px" size="470px 40.77px"
-                          name="comment"
-                          textLayoutMode="scrolling"/>
+                    <Text profile="dialogTableRowCellLeftAligned" position="15px 0px" size="140px 40.77px" name="ingameDateTime" textLayoutMode="scrolling"/>
+                    <Text profile="dialogTableRowCellLeftAligned" position="175px 0px" size="230px 40.77px" name="transactionStatistic" textLayoutMode="scrolling"/>
+                    <Text profile="dialogTableRowCellRightAligned" position="425px 0px" size="115px 40.77px" name="amount"/>
+                    <Text profile="dialogTableRowCellRightAligned" position="560px 0px" size="115px 40.77px" name="balance"/>
+                    <Text profile="dialogTableRowCellLeftAligned" position="695px 0px" size="470px 40.77px" name="comment" textLayoutMode="scrolling"/>
                 </ListItem>
             </SmoothList>
 
             <!-- Scrollbar -->
-            <ThreePartBitmap profile="fs25_listSliderBox" position="-50px -40px" size="12px 645px"
-                             with="anchorTopRight">
+            <ThreePartBitmap profile="fs25_listSliderBox" position="-50px -40px" size="12px 645px" with="anchorTopRight">
                 <Slider profile="fs25_listSlider" size="6px 637px" dataElementId="transactionTable" id="tableSlider"/>
             </ThreePartBitmap>
 
             <!-- Transaction summary -->
             <GuiElement profile="dialogTableSummary" position="60px -775px" size="1245px 40px">
-                <Text profile="dialogTableHeaderLeftAligned" position="0px 0px" size="200px 40px"
-                      text="$l10n_ui_total_transactions"
-                      id="totalTransactionsLabel"/>
-                <Text profile="dialogTableRowCellLeftAligned" position="200px 0px" size="100px 40px" text="0"
-                      id="totalTransactionsValue"/>
+                <Text profile="dialogTableHeaderLeftAligned" position="0px 0px" size="200px 40px" text="$l10n_ui_total_transactions" id="totalTransactionsLabel"/>
+                <Text profile="dialogTableRowCellLeftAligned" position="200px 0px" size="100px 40px" text="0" id="totalTransactionsValue"/>
             </GuiElement>
         </GuiElement>
 

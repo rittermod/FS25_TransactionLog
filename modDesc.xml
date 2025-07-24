@@ -24,7 +24,7 @@ Default keybinding is Right Shift + T.
 
 Source code and issue tracker at https://github.com/rittermod/FS25_TransactionLog
 
-]]></en>
+]]>        </en>
     </description>
     <extraSourceFiles>
         <sourceFile filename="scripts/RmTransactionLog.lua"/>

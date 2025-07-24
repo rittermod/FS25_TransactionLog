@@ -2,7 +2,7 @@ RmTransactionLog = {}
 local RmTransactionLog_mt = Class(RmTransactionLog)
 
 -- Constants
-RmTransactionLog.startYear = 2025  -- Start year for the transaction log (Year 1 = 2025)
+RmTransactionLog.startYear = 2025 -- Start year for the transaction log (Year 1 = 2025)
 -- RmTransactionLog.MIN_TRANSACTION_THRESHOLD = 0.01  -- Minimum transaction amount to log (not used currently, but can be uncommented if needed)
 
 -- Table to store transactions (module level for compatibility)
@@ -10,7 +10,7 @@ RmTransactionLog.transactions = {}
 
 function RmTransactionLog.new(customMt)
     local self = setmetatable({}, customMt or RmTransactionLog_mt)
-    self.transactions = RmTransactionLog.transactions  -- Reference to shared transaction table
+    self.transactions = RmTransactionLog.transactions -- Reference to shared transaction table
     return self
 end
 
@@ -32,7 +32,7 @@ function RmTransactionLog.logTransaction(amount, farmId, moneyTypeTitle, moneyTy
         RmUtils.logWarning("logTransaction called with nil farmId")
         return
     end
-    
+
     -- if math.abs(amount) < RmTransactionLog.MIN_TRANSACTION_THRESHOLD then
     --     -- Ignore transactions that are very small, typically land flattening etc
     --     RmUtils.logDebug("Transaction amount is too small, ignoring: " .. tostring(amount))
@@ -63,14 +63,16 @@ function RmTransactionLog.logTransaction(amount, farmId, moneyTypeTitle, moneyTy
         farmId = farmId,
         amount = amount,
         transactionType = g_i18n:getText(moneyTypeTitle) or moneyTypeTitle,
-        transactionStatistic = g_i18n:getText("finance_"..moneyTypeStatistic) or moneyTypeStatistic,
+        transactionStatistic = g_i18n:getText("finance_" .. moneyTypeStatistic) or moneyTypeStatistic,
         currentFarmBalance = currentFarmBalance or 0,
         comment = comment or "",
     }
 
     table.insert(RmTransactionLog.transactions, transaction)
-    RmUtils.logInfo(string.format("Transaction logged: %s %s | Farm ID: %s | Amount: %.2f | Type: %s %s | Current Balance: %.2f",
-            transaction.realDateTime, transaction.ingameDateTime, transaction.farmId, transaction.amount, transaction.transactionType, transaction.transactionStatistic, transaction.currentFarmBalance))
+    RmUtils.logInfo(string.format(
+        "Transaction logged: %s %s | Farm ID: %s | Amount: %.2f | Type: %s %s | Current Balance: %.2f",
+        transaction.realDateTime, transaction.ingameDateTime, transaction.farmId, transaction.amount,
+        transaction.transactionType, transaction.transactionStatistic, transaction.currentFarmBalance))
     RmUtils.logTrace("Transaction table size:", #RmTransactionLog.transactions)
 end
 
@@ -97,10 +99,11 @@ function RmTransactionLog.changeFarmBalance(self, amount, moneyType, ...)
     end
 
     if self.farmId ~= g_currentMission:getFarmId() then
-       RmUtils.logDebug("changeFarmBalance called with farmId: " .. tostring(self.farmId) .. ", but current farmId is: " .. tostring(g_currentMission:getFarmId()))
-       return
+        RmUtils.logDebug("changeFarmBalance called with farmId: " ..
+        tostring(self.farmId) .. ", but current farmId is: " .. tostring(g_currentMission:getFarmId()))
+        return
     end
-    
+
     -- Log the transaction
     if moneyType == nil then
         -- for some reason moneyType can be nil, so we handle that case
@@ -115,11 +118,11 @@ function RmTransactionLog.changeFarmBalance(self, amount, moneyType, ...)
 
     -- Use batching system for batchable transactions, log others directly
     if RmTransactionBatcher.shouldBatch(moneyType.statistic) then
-        RmTransactionBatcher.addToBatch(amount, self.farmId, moneyType.title, moneyType.statistic, currentBalance, RmTransactionLog.logTransaction)
+        RmTransactionBatcher.addToBatch(amount, self.farmId, moneyType.title, moneyType.statistic, currentBalance,
+            RmTransactionLog.logTransaction)
     else
         RmTransactionLog.logTransaction(amount, self.farmId, moneyType.title, moneyType.statistic, currentBalance)
     end
-
 end
 
 function RmTransactionLog.saveToXmlFile()
@@ -156,13 +159,15 @@ end
 
 function RmTransactionLog.loadFromXMLFile()
     if not g_currentMission or not g_currentMission.missionInfo.savegameDirectory then
-        RmUtils.logWarning("No current savegameDirectory available. No transactions to load. Ignore this if you are loading a new game.")
+        RmUtils.logWarning(
+        "No current savegameDirectory available. No transactions to load. Ignore this if you are loading a new game.")
         return
     end
     local savegameFolderPath = g_currentMission.missionInfo.savegameDirectory .. "/"
     if not fileExists(savegameFolderPath .. "tl_transactions.xml") then
         RmUtils.logWarning("No transaction log XML file found at path:", savegameFolderPath .. "tl_transactions.xml")
-        RmUtils.logWarning("No transactions to load. Ignore this if it is the first time loading savegame with this mod or you have just cleared the log.")
+        RmUtils.logWarning(
+        "No transactions to load. Ignore this if it is the first time loading savegame with this mod or you have just cleared the log.")
         return
     end
 
@@ -197,7 +202,8 @@ function RmTransactionLog.loadFromXMLFile()
     end
 
     delete(xmlFile)
-    RmUtils.logInfo(string.format("Transaction log loaded from XML file. Loaded %d transactions.", #RmTransactionLog.transactions))
+    RmUtils.logInfo(string.format("Transaction log loaded from XML file. Loaded %d transactions.",
+        #RmTransactionLog.transactions))
 end
 
 function RmTransactionLog.loadMap()
@@ -217,14 +223,17 @@ function RmTransactionLog.loadMap()
     -- Register Transaction Log GUI
     RmTransactionLogFrame.register()
 
-    -- Register Comment Input Dialog  
+    -- Register Comment Input Dialog
     RmCommentInputDialog.register()
 end
 
 function RmTransactionLog.addPlayerActionEvents(self, controlling)
     RmUtils.logDebug("Adding player action events")
-    local triggerUp, triggerDown, triggerAlways, startActive, callbackState, disableConflictingBindings = false, true, false, true, nil, true
-    local success, actionEventId, otherEvents = g_inputBinding:registerActionEvent(InputAction.RM_SHOW_TRANSACTION_LOG, RmTransactionLog, RmTransactionLog.showTransactionLog, triggerUp, triggerDown, triggerAlways, startActive, callbackState, disableConflictingBindings);
+    local triggerUp, triggerDown, triggerAlways, startActive, callbackState, disableConflictingBindings = false, true,
+        false, true, nil, true
+    local success, actionEventId, otherEvents = g_inputBinding:registerActionEvent(InputAction.RM_SHOW_TRANSACTION_LOG,
+        RmTransactionLog, RmTransactionLog.showTransactionLog, triggerUp, triggerDown, triggerAlways, startActive,
+        callbackState, disableConflictingBindings);
     if not success then
         RmUtils.logError("Failed to register action event for RM_SHOW_TRANSACTION_LOG")
         return
@@ -233,14 +242,11 @@ function RmTransactionLog.addPlayerActionEvents(self, controlling)
     g_inputBinding:setActionEventTextVisibility(actionEventId, false)
 end
 
-
-
-
 -- function RmTransactionLog.addMoney(self, amount, farmId, moneyType, ...)
 --     -- amount, farmId, moneyType, addMoneyChange, forceShowMoneyChange
 --    RmUtils.logTrace("g_currentMission:addMoney called with:")
 --    RmUtils.logTrace(RmUtils.functionParametersToString(amount, farmId, moneyType, ...))
-   
+
 --    -- Parameter validation
 --    if amount == nil then
 --        RmUtils.logWarning("addMoney called with nil amount")
@@ -250,7 +256,7 @@ end
 --        RmUtils.logWarning("addMoney called with nil farmId")
 --        return
 --    end
-   
+
 --    if farmId ~= g_currentMission:getFarmId() then
 --        RmUtils.logDebug("addMoney called with farmId: " .. tostring(farmId) .. ", but current farmId is: " .. tostring(g_currentMission:getFarmId()))
 --        return
@@ -267,40 +273,39 @@ end
 -- end
 
 function RmTransactionLog.currentMissionStarted()
-   RmUtils.logDebug("Current mission started")
+    RmUtils.logDebug("Current mission started")
 
-   -- Append the mod's addMoney function to the existing g_currentMission.addMoney function
-   -- Not sure this is the right hook, since it also captures money transactions not related to the player
-   if g_currentMission.addMoney == nil then
-       RmUtils.logError("g_currentMission.addMoney is nil, cannot append function.")
-       return
-   end
-   -- hopefully this wil not be needed. Seems all transactions are logged through  farm.changeBalance
-   -- g_currentMission.addMoney = Utils.appendedFunction(g_currentMission.addMoney, RmTransactionLog.addMoney)
-   
-   -- Register for update events to handle batch processing
-   g_currentMission:addUpdateable(RmTransactionLog)
+    -- Append the mod's addMoney function to the existing g_currentMission.addMoney function
+    -- Not sure this is the right hook, since it also captures money transactions not related to the player
+    if g_currentMission.addMoney == nil then
+        RmUtils.logError("g_currentMission.addMoney is nil, cannot append function.")
+        return
+    end
+    -- hopefully this wil not be needed. Seems all transactions are logged through  farm.changeBalance
+    -- g_currentMission.addMoney = Utils.appendedFunction(g_currentMission.addMoney, RmTransactionLog.addMoney)
+
+    -- Register for update events to handle batch processing
+    g_currentMission:addUpdateable(RmTransactionLog)
 end
 
 -- Update tracking for batch processing
 RmTransactionLog.updateTimer = 0
-RmTransactionLog.UPDATE_INTERVAL = 1000  -- Check batches every 1 second (1000ms)
+RmTransactionLog.UPDATE_INTERVAL = 1000 -- Check batches every 1 second (1000ms)
 
 function RmTransactionLog.update(self, dt)
     RmTransactionLog.updateTimer = RmTransactionLog.updateTimer + dt
-    
+
     if RmTransactionLog.updateTimer >= RmTransactionLog.UPDATE_INTERVAL then
         RmTransactionLog.updateTimer = 0
         RmTransactionBatcher.updateBatches(RmTransactionLog.logTransaction)
     end
 end
 
-
 g_messageCenter:subscribe(MessageType.CURRENT_MISSION_START, RmTransactionLog.currentMissionStarted)
 
 
 PlayerInputComponent.registerGlobalPlayerActionEvents = Utils.appendedFunction(
-        PlayerInputComponent.registerGlobalPlayerActionEvents, RmTransactionLog.addPlayerActionEvents)
+    PlayerInputComponent.registerGlobalPlayerActionEvents, RmTransactionLog.addPlayerActionEvents)
 
 Farm.changeBalance = Utils.appendedFunction(Farm.changeBalance, RmTransactionLog.changeFarmBalance)
 

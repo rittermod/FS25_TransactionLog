@@ -5,23 +5,23 @@ RmTransactionBatcher = {}
 local RmTransactionBatcher_mt = Class(RmTransactionBatcher)
 
 -- Constants
-RmTransactionBatcher.BATCH_DELAY_MS = 5000  -- 5 seconds batch collection window
-RmTransactionBatcher.MAX_BATCH_COUNT = 500  -- Maximum number of transactions in a single batch
-RmTransactionBatcher.MAX_ACTIVE_BATCHES = 50  -- Maximum number of active batches, just to be safe
+RmTransactionBatcher.BATCH_DELAY_MS = 5000   -- 5 seconds batch collection window
+RmTransactionBatcher.MAX_BATCH_COUNT = 500   -- Maximum number of transactions in a single batch
+RmTransactionBatcher.MAX_ACTIVE_BATCHES = 50 -- Maximum number of active batches, just to be safe
 
 -- Transaction statistics that should be batched (frequent small transactions)
 RmTransactionBatcher.BATCHABLE_STATISTICS = {
     -- Add the transactionStatistic values that should be batched
-    "constructionCost",           -- Landscaping costs etc
-    "harvestIncome",              -- Income from harvesting crops
-    "other",                      -- Transactions without a specific statistic set 
-    "purchaseFertilizer",         -- Fertilizer purchases
-    "purchaseFuel",               -- Fuel purchases
-    "purchaseWater",              -- Water purchases
-    "soldBales",                  -- Bales sold
-    "soldMilk",                   -- Milk sold
-    "soldProducts",               -- Products sold (e.g. eggs, wool)
-    "soldWood",                   -- Wood sold
+    "constructionCost",   -- Landscaping costs etc
+    "harvestIncome",      -- Income from harvesting crops
+    "other",              -- Transactions without a specific statistic set
+    "purchaseFertilizer", -- Fertilizer purchases
+    "purchaseFuel",       -- Fuel purchases
+    "purchaseWater",      -- Water purchases
+    "soldBales",          -- Bales sold
+    "soldMilk",           -- Milk sold
+    "soldProducts",       -- Products sold (e.g. eggs, wool)
+    "soldWood",           -- Wood sold
 }
 
 -- Hash table for lookup performance
@@ -31,9 +31,9 @@ for _, statistic in ipairs(RmTransactionBatcher.BATCHABLE_STATISTICS) do
 end
 
 -- Batching system state
-RmTransactionBatcher.transactionBatches = {}  -- Active batches being collected
-RmTransactionBatcher.batchTimers = {}         -- Timers for each batch
-RmTransactionBatcher.activeBatchCount = 0     -- Counter for active batches
+RmTransactionBatcher.transactionBatches = {} -- Active batches being collected
+RmTransactionBatcher.batchTimers = {}        -- Timers for each batch
+RmTransactionBatcher.activeBatchCount = 0    -- Counter for active batches
 
 function RmTransactionBatcher.new(customMt)
     local self = setmetatable({}, customMt or RmTransactionBatcher_mt)
@@ -51,11 +51,11 @@ function RmTransactionBatcher.createBatchKey(farmId, transactionType, transactio
 end
 
 -- Add transaction to batch (assumes caller has already checked shouldBatch)
-function RmTransactionBatcher.addToBatch(amount, farmId, moneyTypeTitle, moneyTypeStatistic, currentFarmBalance, logFunction)
-    
+function RmTransactionBatcher.addToBatch(amount, farmId, moneyTypeTitle, moneyTypeStatistic, currentFarmBalance,
+                                         logFunction)
     local batchKey = RmTransactionBatcher.createBatchKey(farmId, moneyTypeTitle, moneyTypeStatistic)
     RmUtils.logDebug("Adding to batch: " .. batchKey .. " amount: " .. tostring(amount))
-    
+
     -- Check if we have too many active batches - flush oldest if needed
     if RmTransactionBatcher.activeBatchCount >= RmTransactionBatcher.MAX_ACTIVE_BATCHES then
         RmUtils.logWarning("Maximum active batches reached, flushing oldest batch")
@@ -64,7 +64,7 @@ function RmTransactionBatcher.addToBatch(amount, farmId, moneyTypeTitle, moneyTy
             RmTransactionBatcher.flushBatch(oldestKey, logFunction)
         end
     end
-    
+
     -- Initialize or update batch
     local batch = RmTransactionBatcher.transactionBatches[batchKey]
     if not batch then
@@ -80,7 +80,7 @@ function RmTransactionBatcher.addToBatch(amount, farmId, moneyTypeTitle, moneyTy
         RmTransactionBatcher.transactionBatches[batchKey] = batch
         RmTransactionBatcher.activeBatchCount = RmTransactionBatcher.activeBatchCount + 1
     end
-    
+
     -- Check if batch is getting too large - flush immediately if so
     if batch.count >= RmTransactionBatcher.MAX_BATCH_COUNT then
         RmUtils.logDebug("Batch reached maximum size, flushing immediately: " .. batchKey)
@@ -103,12 +103,12 @@ function RmTransactionBatcher.addToBatch(amount, farmId, moneyTypeTitle, moneyTy
         batch.count = batch.count + 1
         batch.lastBalance = currentFarmBalance
     end
-    
+
     -- Cancel existing timer if any
     if RmTransactionBatcher.batchTimers[batchKey] then
         RmTransactionBatcher.batchTimers[batchKey] = nil
     end
-    
+
     -- Start new timer to flush this batch after delay (using game time)
     local flushTime = g_currentMission.time + RmTransactionBatcher.BATCH_DELAY_MS
     RmTransactionBatcher.batchTimers[batchKey] = flushTime
@@ -120,18 +120,20 @@ function RmTransactionBatcher.flushBatch(batchKey, logFunction)
     if not batch then
         return
     end
-    
-    RmUtils.logDebug("Flushing batch: " .. batchKey .. " with " .. batch.count .. " transactions, total: " .. tostring(batch.totalAmount))
-    
+
+    RmUtils.logDebug("Flushing batch: " ..
+    batchKey .. " with " .. batch.count .. " transactions, total: " .. tostring(batch.totalAmount))
+
     -- Create aggregated transaction with batch info in comment
     local batchComment = ""
     if batch.count > 1 then
         batchComment = "Combined " .. batch.count .. " transactions"
     end
-    
+
     -- Log the batched transaction with original title, batch info in comment
-    logFunction(batch.totalAmount, batch.farmId, batch.moneyTypeTitle, batch.moneyTypeStatistic, batch.lastBalance, batchComment)
-    
+    logFunction(batch.totalAmount, batch.farmId, batch.moneyTypeTitle, batch.moneyTypeStatistic, batch.lastBalance,
+        batchComment)
+
     -- Clean up
     RmTransactionBatcher.batchTimers[batchKey] = nil
     RmTransactionBatcher.transactionBatches[batchKey] = nil
@@ -143,17 +145,17 @@ function RmTransactionBatcher.updateBatches(logFunction)
     if not g_currentMission then
         return
     end
-    
+
     local currentTime = g_currentMission.time
     local batchesToFlush = {}
-    
+
     -- Find expired batches
     for batchKey, flushTime in pairs(RmTransactionBatcher.batchTimers) do
         if currentTime >= flushTime then
             table.insert(batchesToFlush, batchKey)
         end
     end
-    
+
     -- Flush expired batches
     for _, batchKey in ipairs(batchesToFlush) do
         RmTransactionBatcher.flushBatch(batchKey, logFunction)
