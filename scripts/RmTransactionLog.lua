@@ -3,9 +3,9 @@ local RmTransactionLog_mt = Class(RmTransactionLog)
 
 -- Constants
 RmTransactionLog.startYear = 2025 -- Start year for the transaction log (Year 1 = 2025)
--- RmTransactionLog.MIN_TRANSACTION_THRESHOLD = 0.01  -- Minimum transaction amount to log (not used currently, but can be uncommented if needed)
 
--- Table to store transactions (module level for compatibility)
+-- Table to store transactions at the module level.
+-- This mod is single instance.
 RmTransactionLog.transactions = {}
 
 function RmTransactionLog.new(customMt)
@@ -32,13 +32,7 @@ function RmTransactionLog.logTransaction(amount, farmId, moneyTypeTitle, moneyTy
         RmUtils.logWarning("logTransaction called with nil farmId")
         return
     end
-
-    -- if math.abs(amount) < RmTransactionLog.MIN_TRANSACTION_THRESHOLD then
-    --     -- Ignore transactions that are very small, typically land flattening etc
-    --     RmUtils.logDebug("Transaction amount is too small, ignoring: " .. tostring(amount))
-    --     return
-    -- end
-
+    
     -- Convert the ingame datetime to a calender datetime.
     -- Adjust month to be 1-12 range. Periods starts in march, so we add 2 to align with the calendar.
     -- Then we adjust the month if it exceeds 12 (i.e., January and February).
@@ -241,36 +235,6 @@ function RmTransactionLog.addPlayerActionEvents(self, controlling)
     -- Hide the action event text
     g_inputBinding:setActionEventTextVisibility(actionEventId, false)
 end
-
--- function RmTransactionLog.addMoney(self, amount, farmId, moneyType, ...)
---     -- amount, farmId, moneyType, addMoneyChange, forceShowMoneyChange
---    RmUtils.logTrace("g_currentMission:addMoney called with:")
---    RmUtils.logTrace(RmUtils.functionParametersToString(amount, farmId, moneyType, ...))
-
---    -- Parameter validation
---    if amount == nil then
---        RmUtils.logWarning("addMoney called with nil amount")
---        return
---    end
---    if farmId == nil then
---        RmUtils.logWarning("addMoney called with nil farmId")
---        return
---    end
-
---    if farmId ~= g_currentMission:getFarmId() then
---        RmUtils.logDebug("addMoney called with farmId: " .. tostring(farmId) .. ", but current farmId is: " .. tostring(g_currentMission:getFarmId()))
---        return
---    end
-
---    -- Cache expensive lookup to avoid duplicate calls
---    local currentFarm = g_farmManager:getFarmById(g_currentMission:getFarmId())
---    local currentBalance = currentFarm and currentFarm:getBalance() or 0
---    RmUtils.logDebug(string.format("Current farm balance after change: %.2f", currentBalance))
-
---    -- Use batching system instead of direct logging
---    RM_TransactionBatcher.addToBatch(amount, "mission-"..farmId, moneyType.title, moneyType.statistic, currentBalance, RmTransactionLog.logTransaction)
-
--- end
 
 function RmTransactionLog.currentMissionStarted()
     RmUtils.logDebug("Current mission started")
