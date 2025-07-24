@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8" standalone="no" ?>
 <modDesc descVersion="100">
     <author>Ritter</author>
-    <version>0.0.2.0</version>
+    <version>1.0.0.0</version>
     <iconFilename>icon_TransactionLog.dds</iconFilename>
     <title>
         <en>Transaction log</en>
@@ -11,14 +11,14 @@
 
 This mod adds a transaction log to the game, allowing you to keep track of all your financial transactions in a single place.
 It includes features such as:
-- Transaction Logging: Automatically tracks all financial transactions (income and expenses) in real-time
-- Transaction combining: Groups frequent small transactions (landscaping, fuel purchase etc) to reduce log clutter. The list of transaction types combined is not complete at the moment.
-- GUI Interface: View transaction history in an in-game dialog (accessible via RightShift+R)
-- Transaction Details: Display ingame date/time, transaction type, amount, and current farm balance
+- Transaction Logging: Automatically tracks all financial transactions (income and expenses)
+- Transaction combining: Groups frequent small transactions (landscaping, fuel purchase etc) to reduce log clutter.
+- GUI Interface: View transaction history in an in-game dialog
+- Transaction Details: Display ingame date/time, transaction type, amount, and current balance
 - Add Comments: Edit and add custom comments to individual transactions
-- Export to CSV: Export transaction history to CSV files in the mod settings directory
-- Clear Transaction Log: Remove all stored transactions with confirmation dialog
 - Persistent Storage: Automatically save and load transaction data with your savegame
+- Export to CSV: Export transaction history to CSV files in the mod settings directory for external analysis
+- Clear Transaction Log: Remove all stored transactions with confirmation dialog
 
 Default keybinding is Right Shift + T.
 
