@@ -27,7 +27,7 @@ Source code and issue tracker at https://github.com/rittermod/FS25_TransactionLo
 ]]></en>
     </description>
     <extraSourceFiles>
-        <sourceFile filename="scripts/RM_TransactionLog.lua"/>
+        <sourceFile filename="scripts/RmTransactionLog.lua"/>
     </extraSourceFiles>
     <multiplayer supported="false"/>
     <l10n filenamePrefix="languages/l10n" />
