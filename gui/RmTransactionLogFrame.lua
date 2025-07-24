@@ -1,17 +1,17 @@
 -- Transaction Log Frame
 -- Displays transaction history in a GUI dialog
 
-TransactionLogFrame = {}
-local TransactionLogFrame_mt = Class(TransactionLogFrame, MessageDialog)
+RmTransactionLogFrame = {}
+local RmTransactionLogFrame_mt = Class(RmTransactionLogFrame, MessageDialog)
 
 -- Constants
-TransactionLogFrame.MAX_COMMENT_LENGTH = 200  -- Maximum characters allowed in comment input
+RmTransactionLogFrame.MAX_COMMENT_LENGTH = 200  -- Maximum characters allowed in comment input
 
 -- UI Color constants (cached for performance)
-TransactionLogFrame.POSITIVE_COLOR = {0, 0.8, 0, 1}      -- Darker green for positive amounts
-TransactionLogFrame.NEGATIVE_COLOR = {0.9, 0.2, 0.2, 1}  -- Darker red for negative amounts
+RmTransactionLogFrame.POSITIVE_COLOR = {0, 0.8, 0, 1}      -- Darker green for positive amounts
+RmTransactionLogFrame.NEGATIVE_COLOR = {0.9, 0.2, 0.2, 1}  -- Darker red for negative amounts
 
-TransactionLogFrame.CONTROLS = {
+RmTransactionLogFrame.CONTROLS = {
     "transactionTable",
     "tableSlider",
     "totalTransactionsLabel",
@@ -21,32 +21,32 @@ TransactionLogFrame.CONTROLS = {
     "buttonExportCSV"
 }
 
-function TransactionLogFrame.new(target, custom_mt)
-    RmUtils.logTrace("TransactionLogFrame:new()")
-    local self = MessageDialog.new(target, custom_mt or TransactionLogFrame_mt)
+function RmTransactionLogFrame.new(target, custom_mt)
+    RmUtils.logTrace("RmTransactionLogFrame:new()")
+    local self = MessageDialog.new(target, custom_mt or RmTransactionLogFrame_mt)
     self.transactions = {}
     return self
 end
 
-function TransactionLogFrame:onGuiSetupFinished()
-    RmUtils.logTrace("TransactionLogFrame:onGuiSetupFinished()")
-    TransactionLogFrame:superClass().onGuiSetupFinished(self)
+function RmTransactionLogFrame:onGuiSetupFinished()
+    RmUtils.logTrace("RmTransactionLogFrame:onGuiSetupFinished()")
+    RmTransactionLogFrame:superClass().onGuiSetupFinished(self)
     self.transactionTable:setDataSource(self)
     self.transactionTable:setDelegate(self)
 end
 
-function TransactionLogFrame:onCreate()
-    RmUtils.logTrace("TransactionLogFrame:onCreate()")
-    TransactionLogFrame:superClass().onCreate(self)
+function RmTransactionLogFrame:onCreate()
+    RmUtils.logTrace("RmTransactionLogFrame:onCreate()")
+    RmTransactionLogFrame:superClass().onCreate(self)
 end
 
-function TransactionLogFrame:onOpen()
-    RmUtils.logTrace("TransactionLogFrame:onOpen()")
-    TransactionLogFrame:superClass().onOpen(self)
+function RmTransactionLogFrame:onOpen()
+    RmUtils.logTrace("RmTransactionLogFrame:onOpen()")
+    RmTransactionLogFrame:superClass().onOpen(self)
     
     -- Get transactions from the main transaction log
-    if RM_TransactionLog.transactions then
-        self.transactions = RM_TransactionLog.transactions
+    if RmTransactionLog.transactions then
+        self.transactions = RmTransactionLog.transactions
         -- Sort transactions by in-game time, newest first
         table.sort(self.transactions, function(a, b)
             return (a.ingameDateTime or "") > (b.ingameDateTime or "")
@@ -67,14 +67,14 @@ function TransactionLogFrame:onOpen()
     self:setSoundSuppressed(false)
 end
 
-function TransactionLogFrame:onClose()
-    RmUtils.logTrace("TransactionLogFrame:onClose()")
+function RmTransactionLogFrame:onClose()
+    RmUtils.logTrace("RmTransactionLogFrame:onClose()")
     self.transactions = {}
-    TransactionLogFrame:superClass().onClose(self)
+    RmTransactionLogFrame:superClass().onClose(self)
 end
 
 -- Table data source methods
-function TransactionLogFrame:getNumberOfItemsInSection(list, section)
+function RmTransactionLogFrame:getNumberOfItemsInSection(list, section)
     if list == self.transactionTable then
         return #self.transactions
     else
@@ -82,7 +82,7 @@ function TransactionLogFrame:getNumberOfItemsInSection(list, section)
     end
 end
 
-function TransactionLogFrame:populateCellForItemInSection(list, section, index, cell)
+function RmTransactionLogFrame:populateCellForItemInSection(list, section, index, cell)
     if list == self.transactionTable then
         local transaction = self.transactions[index]
         if transaction then
@@ -99,9 +99,9 @@ function TransactionLogFrame:populateCellForItemInSection(list, section, index, 
             
             -- Set color based on positive/negative amount
             if amount >= 0 then
-                amountElement.textColor = TransactionLogFrame.POSITIVE_COLOR
+                amountElement.textColor = RmTransactionLogFrame.POSITIVE_COLOR
             else
-                amountElement.textColor = TransactionLogFrame.NEGATIVE_COLOR
+                amountElement.textColor = RmTransactionLogFrame.NEGATIVE_COLOR
             end
             
             -- Format and display farm balance
@@ -112,9 +112,9 @@ function TransactionLogFrame:populateCellForItemInSection(list, section, index, 
             
             -- Set color based on positive/negative balance
             if balance >= 0 then
-                balanceElement.textColor = TransactionLogFrame.POSITIVE_COLOR
+                balanceElement.textColor = RmTransactionLogFrame.POSITIVE_COLOR
             else
-                balanceElement.textColor = TransactionLogFrame.NEGATIVE_COLOR
+                balanceElement.textColor = RmTransactionLogFrame.NEGATIVE_COLOR
             end
             
             cell:getAttribute("comment"):setText(transaction.comment or "")
@@ -123,13 +123,13 @@ function TransactionLogFrame:populateCellForItemInSection(list, section, index, 
 end
 
 -- Button handlers
-function TransactionLogFrame:onClickClose()
-    RmUtils.logTrace("TransactionLogFrame:onClickClose()")
+function RmTransactionLogFrame:onClickClose()
+    RmUtils.logTrace("RmTransactionLogFrame:onClickClose()")
     self:close()
 end
 
-function TransactionLogFrame:onClickAddComment()
-    RmUtils.logTrace("TransactionLogFrame:onClickAddComment()")
+function RmTransactionLogFrame:onClickAddComment()
+    RmUtils.logTrace("RmTransactionLogFrame:onClickAddComment()")
     
     -- Get the selected transaction
     local selectedIndex = self.transactionTable.selectedIndex
@@ -144,8 +144,8 @@ function TransactionLogFrame:onClickAddComment()
         local function onCommentCallback(text, clickOk, args)
             if clickOk and text then
                 -- Update the transaction in the main log
-                if RM_TransactionLog and RM_TransactionLog.transactions and RM_TransactionLog.transactions[selectedIndex] then
-                    RM_TransactionLog.transactions[selectedIndex].comment = text
+                if RmTransactionLog and RmTransactionLog.transactions and RmTransactionLog.transactions[selectedIndex] then
+                    RmTransactionLog.transactions[selectedIndex].comment = text
                 end
                 
                 -- Update local transactions and refresh display
@@ -159,12 +159,12 @@ function TransactionLogFrame:onClickAddComment()
         -- Show the comment dialog
         local existingComment = selectedTransaction.comment or ""
         local prompt = string.format(g_i18n:getText("ui_transaction_log_comment_prompt"), selectedTransaction.transactionType or g_i18n:getText("ui_transaction_log_unknown_type"), selectedTransaction.amount or 0)
-        CommentInputDialog.show(onCommentCallback, nil, existingComment, prompt, TransactionLogFrame.MAX_COMMENT_LENGTH, nil)
+        RmCommentInputDialog.show(onCommentCallback, nil, existingComment, prompt, RmTransactionLogFrame.MAX_COMMENT_LENGTH, nil)
     end
 end
 
-function TransactionLogFrame:onClickClearLog()
-    RmUtils.logTrace("TransactionLogFrame:onClickClearLog()")
+function RmTransactionLogFrame:onClickClearLog()
+    RmUtils.logTrace("RmTransactionLogFrame:onClickClearLog()")
     
     -- Show confirmation dialog
     local confirmationText = string.format(g_i18n:getText("ui_transaction_log_clear_confirmation"), #self.transactions)
@@ -172,11 +172,11 @@ function TransactionLogFrame:onClickClearLog()
     YesNoDialog.show(self.onYesNoClearLog, self, confirmationText, g_i18n:getText("ui_transaction_log_clear_title"), g_i18n:getText("ui_transaction_log_clear_yes"), g_i18n:getText("ui_transaction_log_clear_no"))
 end
 
-function TransactionLogFrame:onYesNoClearLog(yes)
+function RmTransactionLogFrame:onYesNoClearLog(yes)
     if yes then
         -- Clear the transaction log
-        if RM_TransactionLog then
-            RM_TransactionLog.transactions = {}
+        if RmTransactionLog then
+            RmTransactionLog.transactions = {}
             self.transactions = {}
             
             -- Update display
@@ -188,8 +188,8 @@ function TransactionLogFrame:onYesNoClearLog(yes)
     end
 end
 
-function TransactionLogFrame:onClickExportCSV()
-    RmUtils.logTrace("TransactionLogFrame:onClickExportCSV()")
+function RmTransactionLogFrame:onClickExportCSV()
+    RmUtils.logTrace("RmTransactionLogFrame:onClickExportCSV()")
     
     if #self.transactions == 0 then
         InfoDialog.show(g_i18n:getText("ui_transaction_log_export_no_data"))
@@ -271,17 +271,16 @@ function TransactionLogFrame:onClickExportCSV()
     end
 end
 
-function TransactionLogFrame.register()
-    RmUtils.logTrace("TransactionLogFrame.register()")
-    local dialog = TransactionLogFrame.new(g_i18n)
-    g_gui:loadGui(RM_TransactionLog.dir .. "gui/TransactionLogFrame.xml", "TransactionLogFrame", dialog)
+function RmTransactionLogFrame.register()
+    RmUtils.logTrace("RmTransactionLogFrame.register()")
+    local dialog = RmTransactionLogFrame.new(g_i18n)
+    g_gui:loadGui(RmTransactionLog.dir .. "gui/RmTransactionLogFrame.xml", "RmTransactionLogFrame", dialog)
 end
 
 -- Static function to show the transaction log dialog
-function TransactionLogFrame.showTransactionLog()
-    RmUtils.logTrace("TransactionLogFrame.showTransactionLog()")
+function RmTransactionLogFrame.showTransactionLog()
+    RmUtils.logTrace("RmTransactionLogFrame.showTransactionLog()")
     
-    -- Create and show the dialog
-    local dialog = TransactionLogFrame.new()
-    g_gui:showDialog("TransactionLogFrame")
+    -- Show the already registered dialog
+    g_gui:showDialog("RmTransactionLogFrame")
 end

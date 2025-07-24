@@ -3,7 +3,7 @@ local RmUtils_mt = Class(RmUtils)
 
 local debugEnabled = true
 local traceEnabled = false
-local LOG_PREFIX = "[RM_TransactionLog] "
+local LOG_PREFIX = "[RmTransactionLog] "
 
 local function debugPrint(msg)
     print(string.format("  Debug: %s", msg))
