@@ -75,9 +75,9 @@ function RmCommentInputDialog:setCallback(callback, target, text, prompt, maxCha
     self.callbackArgs = args
     self.textElement:setText(text or "")
     self.textElement.maxCharacters = maxCharacters or self.textElement.maxCharacters
-    
+
     if prompt ~= nil then self.dialogTextElement:setText(prompt) end
-    
+
     self.dialogPrompt = prompt
     self.maxCharacters = maxCharacters
 end
@@ -86,7 +86,7 @@ function RmCommentInputDialog:sendCallback(clickOk)
     RmUtils.logTrace("RmCommentInputDialog:sendCallback()")
     local text = self.textElement.text
     self:close()
-    
+
     if self.target == nil then
         self.onTextEntered(text, clickOk, self.callbackArgs)
     else
@@ -107,7 +107,7 @@ end
 function RmCommentInputDialog:onClickBack(_, _)
     RmUtils.logTrace("RmCommentInputDialog:onClickBack()")
     if self:isInputDisabled() then return true end
-    
+
     self:sendCallback(false)
     return false
 end
@@ -115,7 +115,7 @@ end
 function RmCommentInputDialog:onClickOk()
     RmUtils.logTrace("RmCommentInputDialog:onClickOk()")
     if self:isInputDisabled() then return true end
-    
+
     self:sendCallback(true)
     self:updateButtonVisibility()
     return false
@@ -130,7 +130,7 @@ end
 function RmCommentInputDialog:update(dT)
     RmUtils.logTrace("RmCommentInputDialog:update()")
     RmCommentInputDialog:superClass().update(self, dT)
-    
+
     if self.reactivateNextFrame then
         self.textElement.blockTime = 0
         self.textElement:onFocusActivate()
@@ -145,13 +145,13 @@ end
 function RmCommentInputDialog:isInputDisabled()
     RmUtils.logTrace("RmCommentInputDialog:isInputDisabled()")
     local disabled
-    
+
     if self.extraInputDisableTime > 0 then
         disabled = not self.doHide
     else
         disabled = false
     end
-    
+
     return disabled
 end
 
@@ -162,6 +162,6 @@ end
 function RmCommentInputDialog:getIsVisible()
     RmUtils.logTrace("RmCommentInputDialog:getIsVisible()")
     if self.doHide then return false end
-    
+
     return RmCommentInputDialog:superClass().getIsVisible(self)
 end
