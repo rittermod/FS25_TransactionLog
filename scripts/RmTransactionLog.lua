@@ -32,6 +32,11 @@ function RmTransactionLog.logTransaction(amount, farmId, moneyTypeTitle, moneyTy
         RmUtils.logWarning("logTransaction called with nil farmId")
         return
     end
+
+    if amount == 0 then
+        RmUtils.logDebug("logTransaction called with amount 0, ignoring transaction")
+        return
+    end
     
     -- Convert the ingame datetime to a calender datetime.
     -- Adjust month to be 1-12 range. Periods starts in march, so we add 2 to align with the calendar.
