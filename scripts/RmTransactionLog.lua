@@ -33,7 +33,9 @@ function RmTransactionLog.logTransaction(amount, farmId, moneyTypeTitle, moneyTy
         return
     end
 
-    if amount == 0 then
+    -- Round to two decimals and get absolute value
+    amount = math.abs(math.floor(amount * 100 + 0.5) / 100)
+    if amount == 0.00 then
         RmUtils.logDebug("logTransaction called with amount 0, ignoring transaction")
         return
     end
