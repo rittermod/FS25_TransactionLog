@@ -22,6 +22,7 @@ RmTransactionBatcher.BATCHABLE_STATISTICS = {
     "soldMilk",           -- Milk sold
     "soldProducts",       -- Products sold (e.g. eggs, wool)
     "soldWood",           -- Wood sold
+    "vehicleRunningCost", -- Running costs for vehicles
 }
 
 -- Hash table for lookup performance
