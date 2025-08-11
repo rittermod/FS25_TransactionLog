@@ -162,3 +162,20 @@ function RmTransactionBatcher.updateBatches(logFunction)
         RmTransactionBatcher.flushBatch(batchKey, logFunction)
     end
 end
+
+-- Flush all active batches immediately
+function RmTransactionBatcher.flushAllBatches(logFunction)
+    local batchesToFlush = {}
+
+    -- Collect all active batch keys
+    for batchKey, _ in pairs(RmTransactionBatcher.transactionBatches) do
+        table.insert(batchesToFlush, batchKey)
+    end
+
+    RmUtils.logDebug("Flushing all " .. #batchesToFlush .. " active batches before save")
+
+    -- Flush all batches
+    for _, batchKey in ipairs(batchesToFlush) do
+        RmTransactionBatcher.flushBatch(batchKey, logFunction)
+    end
+end
