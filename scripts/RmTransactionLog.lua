@@ -128,6 +128,10 @@ end
 
 function RmTransactionLog.saveToXmlFile()
     RmUtils.logInfo("Saving transaction log to XML file...")
+    
+    -- Flush all pending batches before saving
+    RmTransactionBatcher.flushAllBatches(RmTransactionLog.logTransaction)
+    
     if #RmTransactionLog.transactions == 0 then
         RmUtils.logInfo("No transactions to save.")
         return
