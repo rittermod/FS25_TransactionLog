@@ -6,7 +6,7 @@ local RmTransactionBatcher_mt = Class(RmTransactionBatcher)
 
 -- Constants
 RmTransactionBatcher.BATCH_DELAY_MS = 5000   -- 5 seconds batch collection window
-RmTransactionBatcher.MAX_BATCH_COUNT = 500   -- Maximum number of transactions in a single batch
+RmTransactionBatcher.MAX_BATCH_COUNT = 10000 -- Maximum number of transactions in a single batch
 RmTransactionBatcher.MAX_ACTIVE_BATCHES = 50 -- Maximum number of active batches, just to be safe
 
 -- Transaction statistics that should be batched (frequent small transactions)
@@ -23,6 +23,8 @@ RmTransactionBatcher.BATCHABLE_STATISTICS = {
     "soldProducts",       -- Products sold (e.g. eggs, wool)
     "soldWood",           -- Wood sold
     "vehicleRunningCost", -- Running costs for vehicles
+    "wagePayment",        -- Wage payments to workers
+    "productionCosts",    -- Production costs
 }
 
 -- Hash table for lookup performance
@@ -123,7 +125,7 @@ function RmTransactionBatcher.flushBatch(batchKey, logFunction)
     end
 
     RmUtils.logDebug("Flushing batch: " ..
-    batchKey .. " with " .. batch.count .. " transactions, total: " .. tostring(batch.totalAmount))
+        batchKey .. " with " .. batch.count .. " transactions, total: " .. tostring(batch.totalAmount))
 
     -- Create aggregated transaction with batch info in comment
     local batchComment = ""
