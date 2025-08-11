@@ -34,12 +34,12 @@ function RmTransactionLog.logTransaction(amount, farmId, moneyTypeTitle, moneyTy
     end
 
     -- Round to two decimals and get absolute value
-    amount = math.abs(math.floor(amount * 100 + 0.5) / 100)
-    if amount == 0.00 then
+    local amount_check = math.abs(math.floor(amount * 100 + 0.5) / 100)
+    if amount_check == 0.00 then
         RmUtils.logDebug("logTransaction called with amount 0, ignoring transaction")
         return
     end
-    
+
     -- Convert the ingame datetime to a calender datetime.
     -- Adjust month to be 1-12 range. Periods starts in march, so we add 2 to align with the calendar.
     -- Then we adjust the month if it exceeds 12 (i.e., January and February).
@@ -101,7 +101,7 @@ function RmTransactionLog.changeFarmBalance(self, amount, moneyType, ...)
 
     if self.farmId ~= g_currentMission:getFarmId() then
         RmUtils.logDebug("changeFarmBalance called with farmId: " ..
-        tostring(self.farmId) .. ", but current farmId is: " .. tostring(g_currentMission:getFarmId()))
+            tostring(self.farmId) .. ", but current farmId is: " .. tostring(g_currentMission:getFarmId()))
         return
     end
 
@@ -128,10 +128,10 @@ end
 
 function RmTransactionLog.saveToXmlFile()
     RmUtils.logInfo("Saving transaction log to XML file...")
-    
+
     -- Flush all pending batches before saving
     RmTransactionBatcher.flushAllBatches(RmTransactionLog.logTransaction)
-    
+
     if #RmTransactionLog.transactions == 0 then
         RmUtils.logInfo("No transactions to save.")
         return
@@ -165,14 +165,14 @@ end
 function RmTransactionLog.loadFromXMLFile()
     if not g_currentMission or not g_currentMission.missionInfo.savegameDirectory then
         RmUtils.logWarning(
-        "No current savegameDirectory available. No transactions to load. Ignore this if you are loading a new game.")
+            "No current savegameDirectory available. No transactions to load. Ignore this if you are loading a new game.")
         return
     end
     local savegameFolderPath = g_currentMission.missionInfo.savegameDirectory .. "/"
     if not fileExists(savegameFolderPath .. "tl_transactions.xml") then
         RmUtils.logWarning("No transaction log XML file found at path:", savegameFolderPath .. "tl_transactions.xml")
         RmUtils.logWarning(
-        "No transactions to load. Ignore this if it is the first time loading savegame with this mod or you have just cleared the log.")
+            "No transactions to load. Ignore this if it is the first time loading savegame with this mod or you have just cleared the log.")
         return
     end
 
