@@ -1,5 +1,7 @@
--- Transaction Log Frame
--- Displays transaction history in a GUI dialog
+-- RmTransactionLogFrame.lua
+-- Transaction log GUI frame for FS25 Transaction Log mod
+-- Author: Ritter
+-- Description: Displays transaction history in a GUI dialog
 
 RmTransactionLogFrame = {}
 local RmTransactionLogFrame_mt = Class(RmTransactionLogFrame, MessageDialog)
@@ -21,6 +23,10 @@ RmTransactionLogFrame.CONTROLS = {
     "buttonExportCSV"
 }
 
+---Creates a new RmTransactionLogFrame instance
+---@param target table|nil the target object
+---@param custom_mt table|nil optional custom metatable
+---@return RmTransactionLogFrame the new frame instance
 function RmTransactionLogFrame.new(target, custom_mt)
     RmUtils.logTrace("RmTransactionLogFrame:new()")
     local self = MessageDialog.new(target, custom_mt or RmTransactionLogFrame_mt)
@@ -88,13 +94,12 @@ function RmTransactionLogFrame:populateCellForItemInSection(list, section, index
         if transaction then
             -- Set transaction data in the cell
             cell:getAttribute("ingameDateTime"):setText(transaction.ingameDateTime or
-            g_i18n:getText("ui_transaction_log_no_data"))
+                g_i18n:getText("ui_transaction_log_no_data"))
             cell:getAttribute("transactionStatistic"):setText(transaction.transactionStatistic or
-            g_i18n:getText("ui_transaction_log_no_data"))
+                g_i18n:getText("ui_transaction_log_no_data"))
 
-            -- Format amount with currency symbol and color
+            -- Format amount and color
             local amount = transaction.amount or 0
-            -- todo: Add currency symbol?
             local amountText = string.format("%.2f", amount)
             local amountElement = cell:getAttribute("amount")
             amountElement:setText(amountText)
@@ -130,6 +135,7 @@ function RmTransactionLogFrame:onClickClose()
     self:close()
 end
 
+---Shows dialog to add/edit comment for selected transaction
 function RmTransactionLogFrame:onClickAddComment()
     RmUtils.logTrace("RmTransactionLogFrame:onClickAddComment()")
 
@@ -143,7 +149,7 @@ function RmTransactionLogFrame:onClickAddComment()
     local selectedTransaction = self.transactions[selectedIndex]
     if selectedTransaction then
         -- Create callback function to handle comment updates
-        local function onCommentCallback(text, clickOk, args)
+        local function onCommentCallback(text, clickOk)
             if clickOk and text then
                 -- Update the transaction in the main log
                 if RmTransactionLog and RmTransactionLog.transactions and RmTransactionLog.transactions[selectedIndex] then
@@ -168,14 +174,17 @@ function RmTransactionLogFrame:onClickAddComment()
     end
 end
 
+---Shows confirmation dialog to clear the transaction log
 function RmTransactionLogFrame:onClickClearLog()
     RmUtils.logTrace("RmTransactionLogFrame:onClickClearLog()")
 
     -- Show confirmation dialog
     local confirmationText = string.format(g_i18n:getText("ui_transaction_log_clear_confirmation"), #self.transactions)
 
-    YesNoDialog.show(self.onYesNoClearLog, self, confirmationText, g_i18n:getText("ui_transaction_log_clear_title"),
-        g_i18n:getText("ui_transaction_log_clear_yes"), g_i18n:getText("ui_transaction_log_clear_no"))
+    YesNoDialog.show(self.onYesNoClearLog, self, confirmationText,
+        g_i18n:getText("ui_transaction_log_clear_title"),
+        g_i18n:getText("ui_transaction_log_clear_yes"),
+        g_i18n:getText("ui_transaction_log_clear_no"))
 end
 
 function RmTransactionLogFrame:onYesNoClearLog(yes)
@@ -194,6 +203,7 @@ function RmTransactionLogFrame:onYesNoClearLog(yes)
     end
 end
 
+---Exports all transactions to a CSV file
 function RmTransactionLogFrame:onClickExportCSV()
     RmUtils.logTrace("RmTransactionLogFrame:onClickExportCSV()")
 
@@ -263,21 +273,22 @@ function RmTransactionLogFrame:onClickExportCSV()
         -- Extract path from /modSettings/ or /savegame onwards for display
         local displayPath = modSettingsDir
         local modSettingsIndex = string.find(displayPath, "/modSettings/")
-        local savegameIndex = string.find(displayPath, "/savegame")
+        local savegamePathIndex = string.find(displayPath, "/savegame")
         if modSettingsIndex then
             displayPath = string.sub(displayPath, modSettingsIndex)
-        elseif savegameIndex then
-            displayPath = string.sub(displayPath, savegameIndex)
+        elseif savegamePathIndex then
+            displayPath = string.sub(displayPath, savegamePathIndex)
         end
-        local confirmationText = string.format(g_i18n:getText("ui_transaction_log_export_success"), #self.transactions,
-            csvFileName, displayPath)
+        local confirmationText = string.format(g_i18n:getText("ui_transaction_log_export_success"),
+            #self.transactions, csvFileName, displayPath)
         InfoDialog.show(confirmationText)
     else
-        RmUtils.logError("Failed to create CSV file: " .. csvFilePath)
+        RmUtils.logError(string.format("Failed to create CSV file: %s", csvFilePath))
         InfoDialog.show(g_i18n:getText("ui_transaction_log_export_error"))
     end
 end
 
+---Registers the transaction log frame with the GUI system
 function RmTransactionLogFrame.register()
     RmUtils.logTrace("RmTransactionLogFrame.register()")
     local dialog = RmTransactionLogFrame.new(g_i18n)
