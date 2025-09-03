@@ -265,14 +265,14 @@ function RmTransactionLog.loadMap(self)
     RmCommentInputDialog.register()
 end
 
-function RmTransactionLog.addPlayerActionEvents(self)
+function RmTransactionLog.addPlayerActionEvents(self, controlling)
     RmUtils.logDebug("Adding player action events")
     local triggerUp, triggerDown, triggerAlways = false, true, false
     local startActive, callbackState, disableConflictingBindings = true, nil, true
     local success, actionEventId = g_inputBinding:registerActionEvent(
         InputAction.RM_SHOW_TRANSACTION_LOG, RmTransactionLog, RmTransactionLog.showTransactionLog,
         triggerUp, triggerDown, triggerAlways, startActive, callbackState, disableConflictingBindings)
-    if not success then
+    if not success and controlling ~= "VEHICLE" then
         RmUtils.logError("Failed to register action event for RM_SHOW_TRANSACTION_LOG")
         return
     end
