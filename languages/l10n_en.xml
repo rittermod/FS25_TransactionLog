@@ -30,5 +30,11 @@ file %s
 in folder %s"/>
         <text name="ui_transaction_log_export_error" text="Failed to export transactions to CSV file."/>
         <text name="finance_loan" text="Loan"/>
+        <text name="menu_TransactionLog_title" text="Transaction Log"/>
+        <text name="setting_transactionlog_autoExportFrequency" text="Auto-Export to CSV"/>
+        <text name="tooltip_transactionlog_autoExportFrequency" text="Automatically export transaction log at specified intervals"/>
+        <text name="setting_transactionlog_autoExport_daily" text="Daily"/>
+        <text name="setting_transactionlog_autoExport_monthly" text="Monthly"/>
+        <text name="setting_transactionlog_autoExport_yearly" text="Yearly"/>
     </texts>
 </l10n>
