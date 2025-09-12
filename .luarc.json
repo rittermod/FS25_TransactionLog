@@ -1,7 +1,5 @@
 {
     "workspace.useGitIgnore": true,
-    "workspace.ignoreDir": [
-    ],
-    "workspace.ignorePattern": [
-    ]
+    "workspace.ignoreDir": [],
+    "workspace.ignorePattern": []
 }
