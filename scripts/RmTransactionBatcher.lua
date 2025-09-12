@@ -155,7 +155,7 @@ function RmTransactionBatcher.flushBatch(batchKey, logFunction)
 
     -- Log the batched transaction with original title, batch info in comment
     logFunction(batch.totalAmount, batch.farmId, batch.moneyTypeTitle,
-                batch.moneyTypeStatistic, batch.lastBalance, batchComment)
+        batch.moneyTypeStatistic, batch.lastBalance, batchComment)
 
     -- Clean up
     RmTransactionBatcher.batchTimers[batchKey] = nil
