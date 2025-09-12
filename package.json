@@ -3,13 +3,12 @@
   "version": "1.0.0.0",
   "description": "Build system for FS25 Transaction Log mod",
   "scripts": {
-    "build": "../build_mod/build.sh build",
-    "validate": "../build_mod/build.sh validate",
-    "package": "../build_mod/build.sh package",
-    "deploy": "../build_mod/build.sh deploy",
-    "sync": "../build_mod/build.sh sync",
-    "clean": "../build_mod/build.sh clean",
-    "release": "../build_mod/build.sh build"
+    "validate": "cd ../fs25_mod_build_helper && poetry run modbuild validate ../FS25_TransactionLog",
+    "package": "cd ../fs25_mod_build_helper && poetry run modbuild package ../FS25_TransactionLog",
+    "deploy": "cd ../fs25_mod_build_helper && poetry run modbuild deploy ../FS25_TransactionLog",
+    "sync": "cd ../fs25_mod_build_helper && poetry run modbuild sync ../FS25_TransactionLog",
+    "clean": "cd ../fs25_mod_build_helper && poetry run modbuild clean ../FS25_TransactionLog",
+    "release": "cd ../fs25_mod_build_helper && poetry run modbuild build ../FS25_TransactionLog"
   },
   "author": "Ritter",
   "repository": {
