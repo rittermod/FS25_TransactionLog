@@ -4,3 +4,4 @@ CLAUDE.md
 scripts/scratch.lua
 build/
 dist/
+.serena/
