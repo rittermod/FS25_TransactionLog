@@ -45,7 +45,7 @@ RmLogging.setLogPrefix("[RmTransactionLog]")
 
 -- Set the log level for this module (can be changed as needed)
 -- Valid levels: "ERROR", "WARNING", "INFO", "DEBUG", "TRACE" or numeric values 1-5
-RmLogging.setLogLevel("DEBUG") -- Uncomment to enable debug logging
+-- RmLogging.setLogLevel("DEBUG") -- Uncomment to enable debug logging
 -- RmLogging.setLogLevel("TRACE")  -- Uncomment to enable trace logging
 
 
