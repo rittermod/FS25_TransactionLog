@@ -23,6 +23,7 @@ RmTransactionBatcher.BATCHABLE_STATISTICS = {
     "soldBales",          -- Bales sold
     "soldMilk",           -- Milk sold
     "soldProducts",       -- Products sold (e.g. eggs, wool)
+    "purchaseSeeds",      -- Seed purchases
     "soldWood",           -- Wood sold
     "vehicleRunningCost", -- Running costs for vehicles
     "wagePayment",        -- Wage payments to workers
