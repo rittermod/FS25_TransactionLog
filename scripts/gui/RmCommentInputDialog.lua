@@ -5,11 +5,12 @@
 
 RmCommentInputDialog = {}
 local RmCommentInputDialog_mt = Class(RmCommentInputDialog, YesNoDialog)
+local Log = RmLogging.getLogger("TransactionLog")
 local function commentInputDialogCallback() end
 
 ---Registers the comment input dialog with the GUI system
 function RmCommentInputDialog.register()
-    RmLogging.logTrace("RmCommentInputDialog.register()")
+    Log:trace("RmCommentInputDialog.register()")
     local dialog = RmCommentInputDialog.new()
     g_gui:loadGui(RmTransactionLog.dir .. "gui/RmCommentInputDialog.xml", "RmCommentInputDialog", dialog)
     RmCommentInputDialog.INSTANCE = dialog
@@ -24,7 +25,7 @@ end
 ---@param maxCharacters number|nil maximum character limit
 ---@param args any|nil additional arguments for callback
 function RmCommentInputDialog.show(callback, target, text, prompt, maxCharacters, args)
-    RmLogging.logTrace("RmCommentInputDialog.show()")
+    Log:trace("RmCommentInputDialog.show()")
     if RmCommentInputDialog.INSTANCE ~= nil then
         local dialog = RmCommentInputDialog.INSTANCE
         dialog:setText(text)
@@ -38,7 +39,7 @@ end
 ---@param customMt table|nil optional custom metatable
 ---@return RmCommentInputDialog the new dialog instance
 function RmCommentInputDialog.new(target, customMt)
-    RmLogging.logTrace("RmCommentInputDialog.new()")
+    Log:trace("RmCommentInputDialog.new()")
     local dialog = YesNoDialog.new(target, customMt or RmCommentInputDialog_mt)
     dialog.onTextEntered = commentInputDialogCallback
     dialog.callbackArgs = nil
@@ -54,7 +55,7 @@ end
 ---@param gui table existing GUI configuration
 ---@param _ any unused parameter
 function RmCommentInputDialog.createFromExistingGui(gui, _)
-    RmLogging.logTrace("RmCommentInputDialog.createFromExistingGui()")
+    Log:trace("RmCommentInputDialog.createFromExistingGui()")
     RmCommentInputDialog.register()
     local callback = gui.onTextEntered
     local target = gui.target
@@ -66,7 +67,7 @@ function RmCommentInputDialog.createFromExistingGui(gui, _)
 end
 
 function RmCommentInputDialog:onOpen()
-    RmLogging.logTrace("RmCommentInputDialog:onOpen()")
+    Log:trace("RmCommentInputDialog:onOpen()")
     RmCommentInputDialog:superClass().onOpen(self)
     self.extraInputDisableTime = getPlatformId() == PlatformId.SWITCH and 0 or 100
     FocusManager:setFocus(self.textElement)
@@ -76,7 +77,7 @@ function RmCommentInputDialog:onOpen()
 end
 
 function RmCommentInputDialog:onClose()
-    RmLogging.logTrace("RmCommentInputDialog:onClose()")
+    Log:trace("RmCommentInputDialog:onClose()")
     RmCommentInputDialog:superClass().onClose(self)
     if not GS_IS_CONSOLE_VERSION then self.textElement:setForcePressed(false) end
     self:updateButtonVisibility()

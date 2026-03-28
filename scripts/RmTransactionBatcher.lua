@@ -5,6 +5,7 @@
 
 RmTransactionBatcher = {}
 local RmTransactionBatcher_mt = Class(RmTransactionBatcher)
+local Log = RmLogging.getLogger("TransactionLog")
 
 -- Constants
 RmTransactionBatcher.BATCH_DELAY_MS = 5000   -- 5 seconds batch collection window
@@ -75,11 +76,11 @@ end
 function RmTransactionBatcher.addToBatch(amount, farmId, moneyTypeTitle, moneyTypeStatistic,
                                          currentFarmBalance, logFunction)
     local batchKey = RmTransactionBatcher.createBatchKey(farmId, moneyTypeTitle, moneyTypeStatistic)
-    RmLogging.logDebug(string.format("Adding to batch: %s amount: %s", batchKey, tostring(amount)))
+    Log:debug(string.format("Adding to batch: %s amount: %s", batchKey, tostring(amount)))
 
     -- Check if we have too many active batches - flush oldest if needed
     if RmTransactionBatcher.activeBatchCount >= RmTransactionBatcher.MAX_ACTIVE_BATCHES then
-        RmLogging.logWarning("Maximum active batches reached, flushing oldest batch")
+        Log:warning("Maximum active batches reached, flushing oldest batch")
         local oldestKey = next(RmTransactionBatcher.transactionBatches)
         if oldestKey then
             RmTransactionBatcher.flushBatch(oldestKey, logFunction)
@@ -104,7 +105,7 @@ function RmTransactionBatcher.addToBatch(amount, farmId, moneyTypeTitle, moneyTy
 
     -- Check if batch is getting too large - flush immediately if so
     if batch.count >= RmTransactionBatcher.MAX_BATCH_COUNT then
-        RmLogging.logDebug(string.format("Batch reached maximum size, flushing immediately: %s", batchKey))
+        Log:debug(string.format("Batch reached maximum size, flushing immediately: %s", batchKey))
         RmTransactionBatcher.flushBatch(batchKey, logFunction)
         -- Start a new batch for this transaction
         batch = {
@@ -144,7 +145,7 @@ function RmTransactionBatcher.flushBatch(batchKey, logFunction)
         return
     end
 
-    RmLogging.logDebug(string.format(
+    Log:debug(string.format(
         "Flushing batch: %s with %d transactions, total: %s",
         batchKey, batch.count, tostring(batch.totalAmount)))
 
@@ -197,7 +198,7 @@ function RmTransactionBatcher.flushAllBatches(logFunction)
         table.insert(batchesToFlush, batchKey)
     end
 
-    RmLogging.logDebug(string.format("Flushing all %d active batches before save", #batchesToFlush))
+    Log:debug(string.format("Flushing all %d active batches before save", #batchesToFlush))
 
     -- Flush all batches
     for _, batchKey in ipairs(batchesToFlush) do

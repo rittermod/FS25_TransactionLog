@@ -5,6 +5,7 @@
 
 RmTransactionLogSettings = {}
 local RmTransactionLogSettings_mt = Class(RmTransactionLogSettings)
+local Log = RmLogging.getLogger("TransactionLog")
 
 -- Settings definitions
 RmTransactionLogSettings.DEFINITIONS = {
@@ -45,17 +46,17 @@ end
 function RmTransactionLogSettings:setValue(id, value)
     -- Parameter validation
     if id == nil then
-        RmLogging.logWarning("setValue called with nil id")
+        Log:warning("setValue called with nil id")
         return false
     end
     if value == nil then
-        RmLogging.logWarning("setValue called with nil value for setting: " .. tostring(id))
+        Log:warning("setValue called with nil value for setting: " .. tostring(id))
         return false
     end
 
     -- Validate setting exists
     if not RmTransactionLogSettings.DEFINITIONS[id] then
-        RmLogging.logError("Unknown setting ID: " .. tostring(id))
+        Log:error("Unknown setting ID: " .. tostring(id))
         return false
     end
 
@@ -71,12 +72,12 @@ function RmTransactionLogSettings:setValue(id, value)
     end
 
     if not isValidValue then
-        RmLogging.logError("Invalid value " .. tostring(value) .. " for setting " .. id)
+        Log:error("Invalid value " .. tostring(value) .. " for setting " .. id)
         return false
     end
 
     self[id] = value
-    RmLogging.logDebug("Setting " .. id .. " set to: " .. tostring(value))
+    Log:debug("Setting " .. id .. " set to: " .. tostring(value))
     return true
 end
 
@@ -85,12 +86,12 @@ end
 ---@return any the setting value
 function RmTransactionLogSettings:getValue(id)
     if id == nil then
-        RmLogging.logWarning("getValue called with nil id")
+        Log:warning("getValue called with nil id")
         return nil
     end
 
     if not RmTransactionLogSettings.DEFINITIONS[id] then
-        RmLogging.logWarning("Unknown setting ID in getValue: " .. tostring(id))
+        Log:warning("Unknown setting ID in getValue: " .. tostring(id))
         return nil
     end
 
@@ -104,19 +105,19 @@ end
 function RmTransactionLogSettings:getStateIndex(id, inputValue)
     -- Parameter validation
     if id == nil then
-        RmLogging.logWarning("getStateIndex called with nil id")
+        Log:warning("getStateIndex called with nil id")
         return 1
     end
 
     -- Validate setting exists
     if not RmTransactionLogSettings.DEFINITIONS[id] then
-        RmLogging.logError("Unknown setting ID in getStateIndex: " .. tostring(id))
+        Log:error("Unknown setting ID in getStateIndex: " .. tostring(id))
         return 1
     end
 
     local setting = RmTransactionLogSettings.DEFINITIONS[id]
     if not setting.values or #setting.values == 0 then
-        RmLogging.logError("Setting " .. id .. " has no valid values")
+        Log:error("Setting " .. id .. " has no valid values")
         return 1
     end
 
@@ -144,7 +145,7 @@ function RmTransactionLogSettings:getStateIndex(id, inputValue)
         end
     end
 
-    RmLogging.logWarning(id .. " using default index")
+    Log:warning(id .. " using default index")
     return setting.default or 1
 end
 
@@ -158,7 +159,7 @@ function RmTransactionLogSettings:writeSettings()
     if xmlFile ~= 0 then
         local function setXmlValue(id)
             if not id or not RmTransactionLogSettings.DEFINITIONS[id] then
-                RmLogging.logWarning("Skipping invalid setting ID: " .. tostring(id))
+                Log:warning("Skipping invalid setting ID: " .. tostring(id))
                 return
             end
 
@@ -169,7 +170,7 @@ function RmTransactionLogSettings:writeSettings()
             elseif type(value) == 'boolean' then
                 setXMLBool(xmlFile, xmlValueKey, value)
             else
-                RmLogging.logWarning("Unsupported setting type for " .. id .. ": " .. type(value))
+                Log:warning("Unsupported setting type for " .. id .. ": " .. type(value))
             end
         end
 
@@ -179,9 +180,9 @@ function RmTransactionLogSettings:writeSettings()
 
         saveXMLFile(xmlFile)
         delete(xmlFile)
-        RmLogging.logInfo("Settings saved to " .. userSettingsFile)
+        Log:info("Settings saved to " .. userSettingsFile)
     else
-        RmLogging.logError("Failed to create settings file: " .. userSettingsFile)
+        Log:error("Failed to create settings file: " .. userSettingsFile)
     end
 end
 
@@ -191,7 +192,7 @@ function RmTransactionLogSettings:readSettings()
         g_modSettingsDirectory .. "/FS25_TransactionLog")
 
     if not fileExists(userSettingsFile) then
-        RmLogging.logInfo("Creating default settings file: " .. userSettingsFile)
+        Log:info("Creating default settings file: " .. userSettingsFile)
         self:writeSettings()
         return
     end
@@ -201,7 +202,7 @@ function RmTransactionLogSettings:readSettings()
         local function getXmlValue(id)
             local setting = RmTransactionLogSettings.DEFINITIONS[id]
             if not setting then
-                RmLogging.logWarning("Unknown setting in XML file: " .. tostring(id))
+                Log:warning("Unknown setting in XML file: " .. tostring(id))
                 return "MISSING"
             end
 
@@ -234,14 +235,14 @@ function RmTransactionLogSettings:readSettings()
             return "DEFAULT"
         end
 
-        RmLogging.logInfo("Loading Transaction Log settings:")
+        Log:info("Loading Transaction Log settings:")
         for _, id in pairs(RmTransactionLogSettings.MENU_ITEMS) do
             local valueString = getXmlValue(id)
-            RmLogging.logInfo("  " .. id .. ": " .. valueString)
+            Log:info("  " .. id .. ": " .. valueString)
         end
 
         delete(xmlFile)
     else
-        RmLogging.logError("Failed to load settings file: " .. userSettingsFile)
+        Log:error("Failed to load settings file: " .. userSettingsFile)
     end
 end

@@ -5,6 +5,7 @@
 
 RmTransactionLogExporter = {}
 local RmTransactionLogExporter_mt = Class(RmTransactionLogExporter)
+local Log = RmLogging.getLogger("TransactionLog")
 
 ---Creates a new RmTransactionLogExporter instance
 ---@return table the new exporter instance
@@ -40,26 +41,26 @@ function RmTransactionLogExporter.exportToCSV(transactions, filename, directory)
     -- Parameter validation
     if not transactions or type(transactions) ~= "table" then
         local msg = "Invalid transactions parameter for CSV export"
-        RmLogging.logError(msg)
+        Log:error(msg)
         return false, msg
     end
 
     if not filename or filename == "" then
         local msg = "Invalid filename for CSV export"
-        RmLogging.logError(msg)
+        Log:error(msg)
         return false, msg
     end
 
     if not directory or directory == "" then
         local msg = "Invalid directory for CSV export"
-        RmLogging.logError(msg)
+        Log:error(msg)
         return false, msg
     end
 
     -- Check if we have transactions to export
     if #transactions == 0 then
         local msg = "No transactions to export"
-        RmLogging.logInfo(msg)
+        Log:info(msg)
         return false, msg
     end
 
@@ -100,11 +101,11 @@ function RmTransactionLogExporter.exportToCSV(transactions, filename, directory)
         file:write(csvText)
         file:close()
         local msg = string.format("Exported %d transactions to: %s", #transactions, csvFilePath)
-        RmLogging.logInfo(msg)
+        Log:info(msg)
         return true, msg
     else
         local msg = string.format("Failed to create CSV file: %s", csvFilePath)
-        RmLogging.logError(msg)
+        Log:error(msg)
         return false, msg
     end
 end
@@ -171,7 +172,7 @@ function RmTransactionLogExporter.getExportDirectory()
         return directory
     end
 
-    RmLogging.logWarning("No mod settings directory available for export")
+    Log:warning("No mod settings directory available for export")
     return nil
 end
 
