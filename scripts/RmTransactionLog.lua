@@ -35,18 +35,14 @@ end
 RmTransactionLog.dir = g_currentModDirectory
 source(RmTransactionLog.dir .. "scripts/gui/RmTransactionLogFrame.lua")
 source(RmTransactionLog.dir .. "scripts/gui/RmCommentInputDialog.lua")
-source(RmTransactionLog.dir .. "scripts/RmLogging.lua")
+source(RmTransactionLog.dir .. "scripts/rmlib/RmLogging.lua")
 source(RmTransactionLog.dir .. "scripts/RmTransactionBatcher.lua")
 source(RmTransactionLog.dir .. "scripts/RmTransactionLogSettings.lua")
 source(RmTransactionLog.dir .. "scripts/RmTransactionLogExporter.lua")
 
--- Set the log prefix for this module
-RmLogging.setLogPrefix("[RmTransactionLog]")
-
--- Set the log level for this module (can be changed as needed)
--- Valid levels: "ERROR", "WARNING", "INFO", "DEBUG", "TRACE" or numeric values 1-5
--- RmLogging.setLogLevel("DEBUG") -- Uncomment to enable debug logging
--- RmLogging.setLogLevel("TRACE")  -- Uncomment to enable trace logging
+local Log = RmLogging.getLogger("TransactionLog")
+-- Log:setLevel("DEBUG")  -- Uncomment to enable debug logging
+-- Log:setLevel("TRACE")  -- Uncomment to enable trace logging
 
 
 
@@ -60,18 +56,18 @@ RmLogging.setLogPrefix("[RmTransactionLog]")
 function RmTransactionLog.logTransaction(amount, farmId, moneyTypeTitle, moneyTypeStatistic, currentFarmBalance, comment)
     -- Parameter validation
     if amount == nil then
-        RmLogging.logWarning("logTransaction called with nil amount")
+        Log:warning("logTransaction called with nil amount")
         return
     end
     if farmId == nil then
-        RmLogging.logWarning("logTransaction called with nil farmId")
+        Log:warning("logTransaction called with nil farmId")
         return
     end
 
     -- Round to two decimals and get absolute value
     local amount_check = math.abs(math.floor(amount * 100 + 0.5) / 100)
     if amount_check == 0.00 then
-        RmLogging.logDebug("logTransaction called with amount 0, ignoring transaction")
+        Log:debug("logTransaction called with amount 0, ignoring transaction")
         return
     end
 
@@ -105,17 +101,17 @@ function RmTransactionLog.logTransaction(amount, farmId, moneyTypeTitle, moneyTy
     }
 
     table.insert(RmTransactionLog.transactions, transaction)
-    RmLogging.logInfo(string.format(
+    Log:info(string.format(
         "Transaction logged: %s %s | Farm ID: %s | Amount: %.2f | Type: %s %s | Balance: %.2f",
         transaction.realDateTime, transaction.ingameDateTime, transaction.farmId,
         transaction.amount, transaction.transactionType, transaction.transactionStatistic,
         transaction.currentFarmBalance))
-    RmLogging.logTrace("Transaction table size:", #RmTransactionLog.transactions)
+    Log:trace("Transaction table size: %d", #RmTransactionLog.transactions)
 end
 
 ---Shows the transaction log GUI dialog
 function RmTransactionLog.showTransactionLog()
-    RmLogging.logDebug("Showing transaction log GUI")
+    Log:debug("Showing transaction log GUI")
     if g_gui:getIsGuiVisible() then
         return
     end
@@ -159,7 +155,7 @@ end
 function RmTransactionLog.initializeAutoExportTracking()
     local currentDate, currentMonth, currentYear = RmTransactionLog.getCurrentCalendarDate()
     RmTransactionLog.storeDateInfo(currentDate, currentMonth, currentYear)
-    RmLogging.logDebug("Auto-export date tracking initialized with current date: " .. currentDate)
+    Log:debug("Auto-export date tracking initialized with current date: " .. currentDate)
 end
 
 ---Handles day change events for auto-export functionality
@@ -204,7 +200,7 @@ function RmTransactionLog.filterTransactionsByPeriod(transactions, periodPattern
         end
     end
 
-    RmLogging.logDebug(string.format("Filtered %d/%d transactions for period: %s",
+    Log:debug(string.format("Filtered %d/%d transactions for period: %s",
         #filteredTransactions, #transactions, periodPattern))
 
     return filteredTransactions
@@ -232,7 +228,7 @@ end
 ---@param exportType string "daily", "monthly", or "yearly"
 ---@param periodIdentifier string date pattern for the period to export
 function RmTransactionLog.performAutoExport(exportType, periodIdentifier)
-    RmLogging.logInfo(string.format("Performing auto-export: %s for period %s", exportType, periodIdentifier))
+    Log:info(string.format("Performing auto-export: %s for period %s", exportType, periodIdentifier))
 
     -- Flush all pending batches before exporting to ensure we capture all transactions
     RmTransactionBatcher.flushAllBatches(RmTransactionLog.logTransaction)
@@ -242,7 +238,7 @@ function RmTransactionLog.performAutoExport(exportType, periodIdentifier)
     local filteredTransactions = RmTransactionLog.filterTransactionsByPeriod(allTransactions, periodIdentifier)
 
     if #filteredTransactions == 0 then
-        RmLogging.logInfo(string.format("No transactions found for %s auto-export period: %s",
+        Log:info(string.format("No transactions found for %s auto-export period: %s",
             exportType, periodIdentifier))
         return
     end
@@ -252,7 +248,7 @@ function RmTransactionLog.performAutoExport(exportType, periodIdentifier)
     local directory = RmTransactionLogExporter.getExportDirectory()
 
     if not directory then
-        RmLogging.logError("Auto-export failed: No export directory available")
+        Log:error("Auto-export failed: No export directory available")
         return
     end
 
@@ -261,10 +257,10 @@ function RmTransactionLog.performAutoExport(exportType, periodIdentifier)
         filteredTransactions, directory, suffix)
 
     if success then
-        RmLogging.logInfo(string.format("Auto-exported %d transactions (%s) to: %s",
+        Log:info(string.format("Auto-exported %d transactions (%s) to: %s",
             #filteredTransactions, exportType, filename))
     else
-        RmLogging.logError(string.format("Auto-export (%s) failed: %s", exportType, message))
+        Log:error(string.format("Auto-export (%s) failed: %s", exportType, message))
     end
 end
 
@@ -273,21 +269,21 @@ end
 ---@param amount number transaction amount
 ---@param moneyType table money type with title and statistic properties
 function RmTransactionLog.changeFarmBalance(self, amount, moneyType, ...)
-    RmLogging.logTrace("Farm balance changed with parameters:")
-    RmLogging.logTrace(RmLogging.functionParametersToString(self, amount, moneyType, ...))
+    Log:trace("Farm balance changed with parameters:")
+    Log:trace(RmLogging.functionParametersToString(self, amount, moneyType, ...))
 
     -- Parameter validation
     if self == nil then
-        RmLogging.logWarning("changeFarmBalance called with nil farm")
+        Log:warning("changeFarmBalance called with nil farm")
         return
     end
     if amount == nil then
-        RmLogging.logWarning("changeFarmBalance called with nil amount")
+        Log:warning("changeFarmBalance called with nil amount")
         return
     end
 
     if self.farmId ~= g_currentMission:getFarmId() then
-        RmLogging.logDebug(string.format(
+        Log:debug(string.format(
             "changeFarmBalance called with farmId: %s, but current farmId is: %s",
             tostring(self.farmId), tostring(g_currentMission:getFarmId())))
         return
@@ -297,13 +293,13 @@ function RmTransactionLog.changeFarmBalance(self, amount, moneyType, ...)
     if moneyType == nil then
         -- for some reason moneyType can be nil, so we handle that case
         moneyType = MoneyType.OTHER
-        RmLogging.logWarning("moneyType is nil, using MoneyType.OTHER")
+        Log:warning("moneyType is nil, using MoneyType.OTHER")
     end
 
     local currentBalance = self:getBalance()
-    RmLogging.logDebug(string.format("Current farm balance after change: %.2f", currentBalance))
+    Log:debug(string.format("Current farm balance after change: %.2f", currentBalance))
     local currentEquity = self:getEquity()
-    RmLogging.logDebug(string.format("Current farm equity before change: %.2f", currentEquity))
+    Log:debug(string.format("Current farm equity before change: %.2f", currentEquity))
 
     -- Use batching system for batchable transactions, log others directly
     if RmTransactionBatcher.shouldBatch(moneyType.statistic) then
@@ -316,20 +312,20 @@ end
 
 ---Saves all transactions to XML file in savegame directory
 function RmTransactionLog.saveToXmlFile(self)
-    RmLogging.logInfo("Saving transaction log to XML file...")
+    Log:info("Saving transaction log to XML file...")
 
     -- Flush all pending batches before saving
     RmTransactionBatcher.flushAllBatches(RmTransactionLog.logTransaction)
 
     if #RmTransactionLog.transactions == 0 then
-        RmLogging.logInfo("No transactions to save.")
+        Log:info("No transactions to save.")
         return
     end
     local savegameFolderPath = g_currentMission.missionInfo.savegameDirectory .. "/"
     local rootKey = "RmTransactionLog"
     local xmlFile = createXMLFile(rootKey, savegameFolderPath .. "tl_transactions.xml", rootKey);
     if xmlFile == nil then
-        RmLogging.logError("Failed to create XML file for transaction log.")
+        Log:error("Failed to create XML file for transaction log.")
         return
     end
     local i = 0
@@ -347,28 +343,28 @@ function RmTransactionLog.saveToXmlFile(self)
     end
 
     saveXMLFile(xmlFile);
-    RmLogging.logInfo(string.format("Saved %d transactions to tl_transactions.xml.", i))
+    Log:info(string.format("Saved %d transactions to tl_transactions.xml.", i))
     delete(xmlFile);
 end
 
 ---Loads transactions from XML file in savegame directory
 function RmTransactionLog.loadFromXMLFile()
     if not g_currentMission or not g_currentMission.missionInfo.savegameDirectory then
-        RmLogging.logWarning(
+        Log:warning(
             "No current savegameDirectory available. No transactions to load. Ignore this if you are loading a new game.")
         return
     end
     local savegameFolderPath = g_currentMission.missionInfo.savegameDirectory .. "/"
     if not fileExists(savegameFolderPath .. "tl_transactions.xml") then
-        RmLogging.logWarning("No transaction log XML file found at path:", savegameFolderPath .. "tl_transactions.xml")
-        RmLogging.logWarning(
+        Log:warning("No transaction log XML file found at path: %s", savegameFolderPath .. "tl_transactions.xml")
+        Log:warning(
             "No transactions to load. Ignore this if it is the first time loading savegame with this mod or you have just cleared the log.")
         return
     end
 
     local xmlFile = loadXMLFile("RmTransactionLog", savegameFolderPath .. "tl_transactions.xml")
     if xmlFile == nil then
-        RmLogging.logError("Could not load transaction log XML file:", savegameFolderPath .. "tl_transactions.xml")
+        Log:error("Could not load transaction log XML file: %s", savegameFolderPath .. "tl_transactions.xml")
         return
     end
 
@@ -377,7 +373,7 @@ function RmTransactionLog.loadFromXMLFile()
     while true do
         local transactionKey = string.format("%s.transactions.transaction(%d)", rootKey, i)
         if not hasXMLProperty(xmlFile, transactionKey) then
-            RmLogging.logDebug("No more transactions found in XML file at index: " .. i)
+            Log:debug("No more transactions found in XML file at index: " .. i)
             break
         end
 
@@ -397,12 +393,12 @@ function RmTransactionLog.loadFromXMLFile()
     end
 
     delete(xmlFile)
-    RmLogging.logInfo(string.format("Transaction log loaded from XML file. Loaded %d transactions.",
+    Log:info(string.format("Transaction log loaded from XML file. Loaded %d transactions.",
         #RmTransactionLog.transactions))
 end
 
 function RmTransactionLog.loadMap(self)
-    RmLogging.logDebug("Mod loaded!")
+    Log:debug("Mod loaded!")
     local modSettingsDir = g_modSettingsDirectory and (g_modSettingsDirectory .. "/FS25_TransactionLog") or nil
     if modSettingsDir then
         createFolder(modSettingsDir)
@@ -414,11 +410,11 @@ function RmTransactionLog.loadMap(self)
 
     -- Verify settings initialization succeeded
     if not RmTransactionLog.settings then
-        RmLogging.logError("Critical: Settings initialization failed")
+        Log:error("Critical: Settings initialization failed")
         return
     end
 
-    RmLogging.logDebug("Settings system initialized successfully")
+    Log:debug("Settings system initialized successfully")
 
     -- Initialize auto-export date tracking system
     RmTransactionLog.initializeAutoExportTracking()
@@ -442,14 +438,14 @@ function RmTransactionLog.loadMap(self)
 end
 
 function RmTransactionLog.addPlayerActionEvents(self, controlling)
-    RmLogging.logDebug("Adding player action events")
+    Log:debug("Adding player action events")
     local triggerUp, triggerDown, triggerAlways = false, true, false
     local startActive, callbackState, disableConflictingBindings = true, nil, true
     local success, actionEventId = g_inputBinding:registerActionEvent(
         InputAction.RM_SHOW_TRANSACTION_LOG, RmTransactionLog, RmTransactionLog.showTransactionLog,
         triggerUp, triggerDown, triggerAlways, startActive, callbackState, disableConflictingBindings)
     if not success and controlling ~= "VEHICLE" then
-        RmLogging.logError("Failed to register action event for RM_SHOW_TRANSACTION_LOG")
+        Log:error("Failed to register action event for RM_SHOW_TRANSACTION_LOG")
         return
     end
     -- Hide the action event text
@@ -457,12 +453,12 @@ function RmTransactionLog.addPlayerActionEvents(self, controlling)
 end
 
 function RmTransactionLog.currentMissionStarted(self)
-    RmLogging.logDebug("Current mission started")
+    Log:debug("Current mission started")
 
     -- Append the mod's addMoney function to the existing g_currentMission.addMoney function
     -- Not sure this is the right hook, since it also captures money transactions not related to the player
     if g_currentMission.addMoney == nil then
-        RmLogging.logError("g_currentMission.addMoney is nil, cannot append function.")
+        Log:error("g_currentMission.addMoney is nil, cannot append function.")
         return
     end
     -- hopefully this wil not be needed. Seems all transactions are logged through  farm.changeBalance
@@ -478,7 +474,7 @@ RmTransactionLog.updateTimer = 0
 function RmTransactionLog.update(self, dt)
     -- Validate dt parameter
     if type(dt) ~= "number" then
-        RmLogging.logError("Update called with invalid dt parameter: %s (type: %s)", tostring(dt), type(dt))
+        Log:error("Update called with invalid dt parameter: %s (type: %s)", tostring(dt), type(dt))
         return
     end
 
@@ -510,23 +506,23 @@ function RmTransactionLogControls.onMenuOptionChanged(self, state, menuOption)
     local id = menuOption.id
     local settingDef = RmTransactionLogSettings.DEFINITIONS[id]
     if not settingDef then
-        RmLogging.logError("Unknown setting in onMenuOptionChanged: " .. tostring(id))
+        Log:error("Unknown setting in onMenuOptionChanged: " .. tostring(id))
         return
     end
 
     local value = settingDef.values[state]
 
     if value ~= nil then
-        RmLogging.logDebug("SET " .. id .. " = " .. tostring(value))
+        Log:debug("SET " .. id .. " = " .. tostring(value))
         -- Settings are initialized in loadMap() and should be available during UI interactions
         if RmTransactionLog.settings then
             if RmTransactionLog.settings:setValue(id, value) then
                 RmTransactionLog.settings:writeSettings()
             else
-                RmLogging.logError("Failed to set setting " .. id .. ", not saving settings")
+                Log:error("Failed to set setting " .. id .. ", not saving settings")
             end
         else
-            RmLogging.logError("Settings not initialized, cannot save setting: " .. id)
+            Log:error("Settings not initialized, cannot save setting: " .. id)
         end
     end
 end
@@ -544,7 +540,7 @@ function RmTransactionLog.addMenuOption(id)
 
     local settingDef = RmTransactionLogSettings.DEFINITIONS[id]
     if not settingDef then
-        RmLogging.logError("Unknown setting definition for: " .. tostring(id))
+        Log:error("Unknown setting definition for: " .. tostring(id))
         return
     end
 
@@ -554,14 +550,14 @@ function RmTransactionLog.addMenuOption(id)
 
     local menuOptionBox = original:clone(settingsLayout)
     if not menuOptionBox then
-        RmLogging.logError("could not create menu option box")
+        Log:error("could not create menu option box")
         return
     end
     menuOptionBox.id = id .. "box"
 
     local menuOption = menuOptionBox.elements[1]
     if not menuOption then
-        RmLogging.logError("could not create menu option")
+        Log:error("could not create menu option")
         return
     end
 
@@ -628,7 +624,7 @@ FocusManager.setGui = Utils.appendedFunction(FocusManager.setGui, function(_, gu
         for _, control in pairs(RmTransactionLog.CONTROLS) do
             if not control.focusId or not FocusManager.currentFocusData.idToElementMapping[control.focusId] then
                 if not FocusManager:loadElementFromCustomValues(control, nil, nil, false, false) then
-                    RmLogging.logWarning("Could not register control " ..
+                    Log:warning("Could not register control " ..
                         (control.id or control.name or control.focusId) .. " with the focus manager")
                 end
             end
@@ -649,7 +645,7 @@ InGameMenuSettingsFrame.onFrameOpen = Utils.appendedFunction(InGameMenuSettingsF
             if RmTransactionLog.settings then
                 menuOption:setState(RmTransactionLog.settings:getStateIndex(id))
             else
-                RmLogging.logWarning("Settings not initialized when opening settings frame")
+                Log:warning("Settings not initialized when opening settings frame")
                 local settingDef = RmTransactionLogSettings.DEFINITIONS[id]
                 menuOption:setState(settingDef and settingDef.default or 1)
             end

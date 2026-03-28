@@ -5,6 +5,7 @@
 
 RmTransactionLogFrame = {}
 local RmTransactionLogFrame_mt = Class(RmTransactionLogFrame, MessageDialog)
+local Log = RmLogging.getLogger("TransactionLog")
 
 -- Constants
 RmTransactionLogFrame.MAX_COMMENT_LENGTH = 200 -- Maximum characters allowed in comment input
@@ -28,26 +29,26 @@ RmTransactionLogFrame.CONTROLS = {
 ---@param custom_mt table|nil optional custom metatable
 ---@return RmTransactionLogFrame the new frame instance
 function RmTransactionLogFrame.new(target, custom_mt)
-    RmLogging.logTrace("RmTransactionLogFrame:new()")
+    Log:trace("RmTransactionLogFrame:new()")
     local self = MessageDialog.new(target, custom_mt or RmTransactionLogFrame_mt)
     self.transactions = {}
     return self
 end
 
 function RmTransactionLogFrame:onGuiSetupFinished()
-    RmLogging.logTrace("RmTransactionLogFrame:onGuiSetupFinished()")
+    Log:trace("RmTransactionLogFrame:onGuiSetupFinished()")
     RmTransactionLogFrame:superClass().onGuiSetupFinished(self)
     self.transactionTable:setDataSource(self)
     self.transactionTable:setDelegate(self)
 end
 
 function RmTransactionLogFrame:onCreate()
-    RmLogging.logTrace("RmTransactionLogFrame:onCreate()")
+    Log:trace("RmTransactionLogFrame:onCreate()")
     RmTransactionLogFrame:superClass().onCreate(self)
 end
 
 function RmTransactionLogFrame:onOpen()
-    RmLogging.logTrace("RmTransactionLogFrame:onOpen()")
+    Log:trace("RmTransactionLogFrame:onOpen()")
     RmTransactionLogFrame:superClass().onOpen(self)
 
     -- Get transactions from the main transaction log
@@ -74,7 +75,7 @@ function RmTransactionLogFrame:onOpen()
 end
 
 function RmTransactionLogFrame:onClose()
-    RmLogging.logTrace("RmTransactionLogFrame:onClose()")
+    Log:trace("RmTransactionLogFrame:onClose()")
     self.transactions = {}
     RmTransactionLogFrame:superClass().onClose(self)
 end
@@ -131,18 +132,18 @@ end
 
 -- Button handlers
 function RmTransactionLogFrame:onClickClose()
-    RmLogging.logTrace("RmTransactionLogFrame:onClickClose()")
+    Log:trace("RmTransactionLogFrame:onClickClose()")
     self:close()
 end
 
 ---Shows dialog to add/edit comment for selected transaction
 function RmTransactionLogFrame:onClickAddComment()
-    RmLogging.logTrace("RmTransactionLogFrame:onClickAddComment()")
+    Log:trace("RmTransactionLogFrame:onClickAddComment()")
 
     -- Get the selected transaction
     local selectedIndex = self.transactionTable.selectedIndex
     if selectedIndex == nil or selectedIndex < 1 or selectedIndex > #self.transactions then
-        RmLogging.logWarning("No transaction selected or invalid selection")
+        Log:warning("No transaction selected or invalid selection")
         return
     end
 
@@ -160,7 +161,7 @@ function RmTransactionLogFrame:onClickAddComment()
                 self.transactions[selectedIndex].comment = text
                 self.transactionTable:reloadData()
 
-                RmLogging.logDebug(string.format("Comment updated for transaction: %s", text))
+                Log:debug(string.format("Comment updated for transaction: %s", text))
             end
         end
 
@@ -176,7 +177,7 @@ end
 
 ---Shows confirmation dialog to clear the transaction log
 function RmTransactionLogFrame:onClickClearLog()
-    RmLogging.logTrace("RmTransactionLogFrame:onClickClearLog()")
+    Log:trace("RmTransactionLogFrame:onClickClearLog()")
 
     -- Show confirmation dialog
     local confirmationText = string.format(g_i18n:getText("ui_transaction_log_clear_confirmation"), #self.transactions)
@@ -198,14 +199,14 @@ function RmTransactionLogFrame:onYesNoClearLog(yes)
             self.totalTransactionsValue:setText("0")
             self.transactionTable:reloadData()
 
-            RmLogging.logInfo("Transaction log cleared via GUI")
+            Log:info("Transaction log cleared via GUI")
         end
     end
 end
 
 ---Exports all transactions to a CSV file
 function RmTransactionLogFrame:onClickExportCSV()
-    RmLogging.logTrace("RmTransactionLogFrame:onClickExportCSV()")
+    Log:trace("RmTransactionLogFrame:onClickExportCSV()")
 
     if #self.transactions == 0 then
         InfoDialog.show(g_i18n:getText("ui_transaction_log_export_no_data"))
@@ -234,21 +235,21 @@ function RmTransactionLogFrame:onClickExportCSV()
             #self.transactions, csvFileName, displayPath)
         InfoDialog.show(confirmationText)
     else
-        RmLogging.logError("CSV export failed: " .. message)
+        Log:error("CSV export failed: " .. message)
         InfoDialog.show(g_i18n:getText("ui_transaction_log_export_error"))
     end
 end
 
 ---Registers the transaction log frame with the GUI system
 function RmTransactionLogFrame.register()
-    RmLogging.logTrace("RmTransactionLogFrame.register()")
+    Log:trace("RmTransactionLogFrame.register()")
     local dialog = RmTransactionLogFrame.new(g_i18n)
     g_gui:loadGui(RmTransactionLog.dir .. "gui/RmTransactionLogFrame.xml", "RmTransactionLogFrame", dialog)
 end
 
 -- Static function to show the transaction log dialog
 function RmTransactionLogFrame.showTransactionLog()
-    RmLogging.logTrace("RmTransactionLogFrame.showTransactionLog()")
+    Log:trace("RmTransactionLogFrame.showTransactionLog()")
 
     -- Show the already registered dialog
     g_gui:showDialog("RmTransactionLogFrame")
