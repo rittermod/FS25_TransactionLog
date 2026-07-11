@@ -96,8 +96,9 @@ function RmTransactionLogFrame:populateCellForItemInSection(list, section, index
             -- Set transaction data in the cell
             cell:getAttribute("ingameDateTime"):setText(transaction.ingameDateTime or
                 g_i18n:getText("ui_transaction_log_no_data"))
-            cell:getAttribute("transactionStatistic"):setText(transaction.transactionStatistic or
-                g_i18n:getText("ui_transaction_log_no_data"))
+            -- Resolve the stored statistic key to the active language at render time.
+            cell:getAttribute("transactionStatistic"):setText(
+                RmTransactionLog.resolveStatistic(transaction.statistic))
 
             -- Format amount and color
             local amount = transaction.amount or 0
@@ -165,11 +166,17 @@ function RmTransactionLogFrame:onClickAddComment()
             end
         end
 
-        -- Show the comment dialog
+        -- Resolve the stored type key for the prompt. pcall-guard the format against a
+        -- malformed comment-prompt translation (bad specifier / wrong arg count); a '%'
+        -- inside the interpolated type argument is itself harmless in Lua string.format.
+        local typeText = RmTransactionLog.resolveType(selectedTransaction.title,
+            selectedTransaction.customEnv, selectedTransaction.constant)
         local existingComment = selectedTransaction.comment or ""
-        local prompt = string.format(g_i18n:getText("ui_transaction_log_comment_prompt"),
-            selectedTransaction.transactionType or g_i18n:getText("ui_transaction_log_unknown_type"),
-            selectedTransaction.amount or 0)
+        local ok, prompt = pcall(string.format, g_i18n:getText("ui_transaction_log_comment_prompt"),
+            typeText, selectedTransaction.amount or 0)
+        if not ok then
+            prompt = typeText
+        end
         RmCommentInputDialog.show(onCommentCallback, nil, existingComment, prompt,
             RmTransactionLogFrame.MAX_COMMENT_LENGTH, nil)
     end

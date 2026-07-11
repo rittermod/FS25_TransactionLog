@@ -39,21 +39,136 @@ source(RmTransactionLog.dir .. "scripts/rmlib/RmLogging.lua")
 source(RmTransactionLog.dir .. "scripts/RmTransactionBatcher.lua")
 source(RmTransactionLog.dir .. "scripts/RmTransactionLogSettings.lua")
 source(RmTransactionLog.dir .. "scripts/RmTransactionLogExporter.lua")
+source(RmTransactionLog.dir .. "scripts/RmTransactionMigration.lua")
 
 local Log = RmLogging.getLogger("TransactionLog")
 -- Log:setLevel("DEBUG")  -- Uncomment to enable debug logging
 -- Log:setLevel("TRACE")  -- Uncomment to enable trace logging
 
+-- Schema version stamped on the root of the persisted transaction file. Bumped to
+-- 2 for the key-based storage model (snapshot money-type keys, resolve on display).
+RmTransactionLog.SCHEMA_VERSION = 2
+
+-- Lazily-built map from a money type's runtime id to its MoneyType constant name
+-- (e.g. 60 -> "VEHICLE_RUNNING_COSTS"). Built on first capture, post-registration.
+RmTransactionLog.moneyTypeConstantById = nil
+
+-- ============================================================
+-- Money-type identity + display resolution
+-- ============================================================
+
+---Builds an id->constant-name map from a MoneyType-like table.
+---A money type value is a table carrying an `id`; the constant is the field name
+---it is stored under (MoneyType.OTHER etc.). Aliases (two names, same id) resolve
+---deterministically to the lexicographically smallest name so a captured constant
+---is stable across sessions.
+---@param moneyTypeTable table the MoneyType table (or a fixture with the same shape)
+---@return table map id (number) -> constant name (string)
+function RmTransactionLog.buildMoneyTypeConstantMap(moneyTypeTable)
+    local map = {}
+    for name, value in pairs(moneyTypeTable) do
+        if type(value) == "table" and value.id ~= nil then
+            local existing = map[value.id]
+            if existing == nil or name < existing then
+                map[value.id] = name
+            end
+        end
+    end
+    return map
+end
+
+---Looks up a constant name for an id in a prebuilt map, self-healing a miss with
+---one reverse scan and caching the result (a real name, or `false` for a negative)
+---so repeated misses stay off the scan path.
+---@param map table id -> constant name (mutated to cache the lookup)
+---@param moneyTypeTable table source table to reverse-scan on a miss
+---@param id number|nil money type id
+---@return string|nil constant name, or nil when the id has no named constant
+function RmTransactionLog.lookupConstant(map, moneyTypeTable, id)
+    if id == nil then
+        return nil
+    end
+    local cached = map[id]
+    if cached ~= nil then
+        if cached == false then
+            return nil
+        end
+        return cached
+    end
+    -- Miss: reverse-scan for a late-registered type, deterministic smallest name.
+    local best = nil
+    for name, value in pairs(moneyTypeTable) do
+        if type(value) == "table" and value.id == id then
+            if best == nil or name < best then
+                best = name
+            end
+        end
+    end
+    map[id] = best or false
+    return best
+end
+
+---Resolves the MoneyType constant name for a runtime id, building the map on the
+---first call (guaranteed post-registration).
+---@param id number|nil money type id
+---@return string|nil constant name, or nil when unknown
+function RmTransactionLog.getMoneyTypeConstant(id)
+    if RmTransactionLog.moneyTypeConstantById == nil then
+        RmTransactionLog.moneyTypeConstantById = RmTransactionLog.buildMoneyTypeConstantMap(MoneyType)
+    end
+    return RmTransactionLog.lookupConstant(RmTransactionLog.moneyTypeConstantById, MoneyType, id)
+end
+
+---Resolves a stored money-type title key to display text for the active language.
+---Fallback chain: localized title via getText(title, customEnv) (customEnv best-effort)
+----> constant name -> raw title key -> "--". getText never returns nil, so every step is hasText-guarded.
+---@param titleKey string|nil i18n key (e.g. "finance_other")
+---@param customEnv string|nil owning mod env, best-effort (nil for base/many mods)
+---@param constant string|nil derived constant name, secondary fallback
+---@return string display text
+function RmTransactionLog.resolveType(titleKey, customEnv, constant)
+    if titleKey ~= nil and titleKey ~= "" and g_i18n:hasText(titleKey, customEnv) then
+        return g_i18n:getText(titleKey, customEnv)
+    end
+    if constant ~= nil and constant ~= "" then
+        return constant
+    end
+    if titleKey ~= nil and titleKey ~= "" then
+        return titleKey
+    end
+    return g_i18n:getText("ui_transaction_log_no_data")
+end
+
+---Resolves a stored statistic key to its category display text.
+---Fallback chain: getText("finance_"..statistic), modless (no customEnv) -> raw
+---statistic -> "--". hasText-guarded (getText never returns nil).
+---@param statistic string|nil statistic key (e.g. "other")
+---@return string display text
+function RmTransactionLog.resolveStatistic(statistic)
+    if statistic ~= nil and statistic ~= "" then
+        local key = "finance_" .. statistic
+        if g_i18n:hasText(key) then
+            return g_i18n:getText(key)
+        end
+        return statistic
+    end
+    return g_i18n:getText("ui_transaction_log_no_data")
+end
 
 
----Logs a single transaction to the transaction log
----@param amount number transaction amount (will be made absolute)
+
+---Logs a single transaction to the transaction log.
+---Stores the money-type snapshot RAW (i18n keys + identity), never resolved text -
+---display resolution happens in the GUI/exporter, keeping the log language-agnostic.
+---@param amount number transaction amount (signed: negative = expense)
 ---@param farmId number the farm ID that performed the transaction
----@param moneyTypeTitle string localized transaction type title
----@param moneyTypeStatistic string transaction statistic type
+---@param title string|nil money-type title i18n key (moneyType.title, e.g. "finance_other")
+---@param statistic string|nil money-type statistic key (moneyType.statistic, e.g. "other")
+---@param customEnv string|nil owning mod env for the title key, best-effort (nil for base)
+---@param constant string|nil derived MoneyType constant name (e.g. "VEHICLE_REPAIR")
 ---@param currentFarmBalance number current farm balance after transaction
 ---@param comment string|nil optional comment for the transaction
-function RmTransactionLog.logTransaction(amount, farmId, moneyTypeTitle, moneyTypeStatistic, currentFarmBalance, comment)
+function RmTransactionLog.logTransaction(amount, farmId, title, statistic, customEnv, constant, currentFarmBalance, comment)
     -- Parameter validation
     if amount == nil then
         Log:warning("logTransaction called with nil amount")
@@ -89,23 +204,27 @@ function RmTransactionLog.logTransaction(amount, farmId, moneyTypeTitle, moneyTy
     local minute = g_currentMission.environment.currentMinute
     local ingameDateTime = string.format("%04d-%02d-%02d %02d:%02d", year, month, day, hour, minute)
     local realDateTime = getDate("%Y-%m-%dT%H:%M:%S%z")
+    -- Store keys/identity RAW; resolve to display text only in the GUI/exporter.
+    -- Empty customEnv/constant normalize to nil (never concat/getText onto nil).
     local transaction = {
         realDateTime = realDateTime,
         ingameDateTime = ingameDateTime,
         farmId = farmId,
         amount = amount,
-        transactionType = g_i18n:getText(moneyTypeTitle) or moneyTypeTitle,
-        transactionStatistic = g_i18n:getText("finance_" .. moneyTypeStatistic) or moneyTypeStatistic,
+        title = title,
+        statistic = statistic,
+        customEnv = (customEnv ~= "" and customEnv) or nil,
+        constant = (constant ~= "" and constant) or nil,
         currentFarmBalance = currentFarmBalance or 0,
         comment = comment or "",
     }
 
     table.insert(RmTransactionLog.transactions, transaction)
     Log:info(string.format(
-        "Transaction logged: %s %s | Farm ID: %s | Amount: %.2f | Type: %s %s | Balance: %.2f",
+        "Transaction logged: %s %s | Farm ID: %s | Amount: %.2f | Title: %s | Statistic: %s | Constant: %s | Balance: %.2f",
         transaction.realDateTime, transaction.ingameDateTime, transaction.farmId,
-        transaction.amount, transaction.transactionType, transaction.transactionStatistic,
-        transaction.currentFarmBalance))
+        transaction.amount, tostring(transaction.title), tostring(transaction.statistic),
+        tostring(transaction.constant), transaction.currentFarmBalance))
     Log:trace("Transaction table size: %d", #RmTransactionLog.transactions)
 end
 
@@ -212,13 +331,13 @@ end
 ---@return string suffix for filename
 function RmTransactionLog.generateAutoExportSuffix(exportType, periodIdentifier)
     if exportType == "daily" then
-        -- periodIdentifier = "2024-12-09" → suffix = "auto_20241209"
+        -- periodIdentifier = "2024-12-09" -> suffix = "auto_20241209"
         return "auto_" .. string.gsub(periodIdentifier, "-", "")
     elseif exportType == "monthly" then
-        -- periodIdentifier = "2024-12" → suffix = "auto_202412"
+        -- periodIdentifier = "2024-12" -> suffix = "auto_202412"
         return "auto_" .. string.gsub(periodIdentifier, "-", "")
     elseif exportType == "yearly" then
-        -- periodIdentifier = "2024" → suffix = "auto_2024"
+        -- periodIdentifier = "2024" -> suffix = "auto_2024"
         return "auto_" .. periodIdentifier
     end
     return "auto_unknown"
@@ -301,12 +420,16 @@ function RmTransactionLog.changeFarmBalance(self, amount, moneyType, ...)
     local currentEquity = self:getEquity()
     Log:debug(string.format("Current farm equity before change: %.2f", currentEquity))
 
+    -- Derive the stable constant name once; batch/log carry the raw snapshot.
+    local constant = RmTransactionLog.getMoneyTypeConstant(moneyType.id)
+
     -- Use batching system for batchable transactions, log others directly
     if RmTransactionBatcher.shouldBatch(moneyType.statistic) then
-        RmTransactionBatcher.addToBatch(amount, self.farmId, moneyType.title, moneyType.statistic, currentBalance,
+        RmTransactionBatcher.addToBatch(amount, self.farmId, moneyType, constant, currentBalance,
             RmTransactionLog.logTransaction)
     else
-        RmTransactionLog.logTransaction(amount, self.farmId, moneyType.title, moneyType.statistic, currentBalance)
+        RmTransactionLog.logTransaction(amount, self.farmId, moneyType.title, moneyType.statistic,
+            moneyType.customEnv, constant, currentBalance)
     end
 end
 
@@ -317,10 +440,8 @@ function RmTransactionLog.saveToXmlFile(self)
     -- Flush all pending batches before saving
     RmTransactionBatcher.flushAllBatches(RmTransactionLog.logTransaction)
 
-    if #RmTransactionLog.transactions == 0 then
-        Log:info("No transactions to save.")
-        return
-    end
+    -- Always write the versioned root, even at 0 rows: the file then exists as a v2
+    -- stub so a fresh v2 session never re-triggers migration on the next load.
     local savegameFolderPath = g_currentMission.missionInfo.savegameDirectory .. "/"
     local rootKey = "RmTransactionLog"
     local xmlFile = createXMLFile(rootKey, savegameFolderPath .. "tl_transactions.xml", rootKey);
@@ -328,22 +449,26 @@ function RmTransactionLog.saveToXmlFile(self)
         Log:error("Failed to create XML file for transaction log.")
         return
     end
+    setXMLString(xmlFile, rootKey .. "#schemaVersion", tostring(RmTransactionLog.SCHEMA_VERSION))
     local i = 0
     for _, transaction in ipairs(RmTransactionLog.transactions) do
         local transactionKey = string.format("%s.transactions.transaction(%d)", rootKey, i)
-        setXMLString(xmlFile, transactionKey .. "#realDateTime", transaction.realDateTime)
-        setXMLString(xmlFile, transactionKey .. "#ingameDateTime", transaction.ingameDateTime)
-        setXMLInt(xmlFile, transactionKey .. "#farmId", transaction.farmId)
+        setXMLString(xmlFile, transactionKey .. "#realDateTime", transaction.realDateTime or "")
+        setXMLString(xmlFile, transactionKey .. "#ingameDateTime", transaction.ingameDateTime or "")
+        setXMLInt(xmlFile, transactionKey .. "#farmId", transaction.farmId or 0)
         setXMLFloat(xmlFile, transactionKey .. "#amount", transaction.amount)
-        setXMLString(xmlFile, transactionKey .. "#transactionType", transaction.transactionType)
-        setXMLString(xmlFile, transactionKey .. "#transactionStatistic", transaction.transactionStatistic or "")
+        setXMLString(xmlFile, transactionKey .. "#title", transaction.title or "")
+        setXMLString(xmlFile, transactionKey .. "#statistic", transaction.statistic or "")
+        setXMLString(xmlFile, transactionKey .. "#customEnv", transaction.customEnv or "")
+        setXMLString(xmlFile, transactionKey .. "#constant", transaction.constant or "")
         setXMLFloat(xmlFile, transactionKey .. "#currentFarmBalance", transaction.currentFarmBalance or 0)
         setXMLString(xmlFile, transactionKey .. "#comment", transaction.comment or "")
         i = i + 1
     end
 
     saveXMLFile(xmlFile);
-    Log:info(string.format("Saved %d transactions to tl_transactions.xml.", i))
+    Log:info(string.format("Saved %d transactions to tl_transactions.xml (schemaVersion=%d).",
+        i, RmTransactionLog.SCHEMA_VERSION))
     delete(xmlFile);
 end
 
@@ -369,36 +494,65 @@ function RmTransactionLog.loadFromXMLFile()
     end
 
     local rootKey = "RmTransactionLog"
+
+    -- Detect the schema version BEFORE the record loop. A legacy (v1) file has no
+    -- schemaVersion; hand it to the clean-break migration and stop here.
+    local schemaVersionRaw = getXMLString(xmlFile, rootKey .. "#schemaVersion")
+    if RmTransactionMigration.isLegacyVersion(schemaVersionRaw) then
+        Log:info("Legacy transaction file detected (schemaVersion=%s); starting migration.",
+            tostring(schemaVersionRaw))
+        local v1Rows = RmTransactionMigration.readV1Rows(xmlFile, rootKey)
+        delete(xmlFile)
+        RmTransactionMigration.migrateV1(savegameFolderPath, v1Rows)
+        return
+    end
+
     local i = 0
+    local loaded = 0
     while true do
         local transactionKey = string.format("%s.transactions.transaction(%d)", rootKey, i)
         if not hasXMLProperty(xmlFile, transactionKey) then
             Log:debug("No more transactions found in XML file at index: " .. i)
             break
         end
-
-        local transaction = {
-            realDateTime = getXMLString(xmlFile, transactionKey .. "#realDateTime"),
-            ingameDateTime = getXMLString(xmlFile, transactionKey .. "#ingameDateTime"),
-            farmId = getXMLInt(xmlFile, transactionKey .. "#farmId"),
-            amount = getXMLFloat(xmlFile, transactionKey .. "#amount"),
-            transactionType = getXMLString(xmlFile, transactionKey .. "#transactionType"),
-            transactionStatistic = getXMLString(xmlFile, transactionKey .. "#transactionStatistic") or "",
-            currentFarmBalance = getXMLFloat(xmlFile, transactionKey .. "#currentFarmBalance") or 0,
-            comment = getXMLString(xmlFile, transactionKey .. "#comment") or "",
-        }
-
-        table.insert(RmTransactionLog.transactions, transaction)
         i = i + 1
+
+        local amount = getXMLFloat(xmlFile, transactionKey .. "#amount")
+        local ingameDateTime = getXMLString(xmlFile, transactionKey .. "#ingameDateTime")
+        if amount == nil or ingameDateTime == nil then
+            Log:error("Skipping malformed transaction at index %d (missing amount or ingameDateTime)", i - 1)
+        else
+            local customEnv = getXMLString(xmlFile, transactionKey .. "#customEnv")
+            local constant = getXMLString(xmlFile, transactionKey .. "#constant")
+            local transaction = {
+                realDateTime = getXMLString(xmlFile, transactionKey .. "#realDateTime"),
+                ingameDateTime = ingameDateTime,
+                farmId = getXMLInt(xmlFile, transactionKey .. "#farmId"),
+                amount = amount,
+                title = getXMLString(xmlFile, transactionKey .. "#title"),
+                statistic = getXMLString(xmlFile, transactionKey .. "#statistic") or "",
+                customEnv = (customEnv ~= nil and customEnv ~= "" and customEnv) or nil,
+                constant = (constant ~= nil and constant ~= "" and constant) or nil,
+                currentFarmBalance = getXMLFloat(xmlFile, transactionKey .. "#currentFarmBalance") or 0,
+                comment = getXMLString(xmlFile, transactionKey .. "#comment") or "",
+            }
+            table.insert(RmTransactionLog.transactions, transaction)
+            loaded = loaded + 1
+        end
     end
 
     delete(xmlFile)
-    Log:info(string.format("Transaction log loaded from XML file. Loaded %d transactions.",
-        #RmTransactionLog.transactions))
+    Log:info(string.format("Transaction log loaded from XML file. Loaded %d transactions.", loaded))
 end
 
 function RmTransactionLog.loadMap(self)
     Log:debug("Mod loaded!")
+
+    -- Mod Lua state outlives g_currentMission (only the mission is rebuilt between
+    -- savegame loads), so clear the per-load migration guard here. Without this, a
+    -- second legacy save loaded in the same session would skip its own migration.
+    RmTransactionMigration._migrationDone = false
+
     local modSettingsDir = g_modSettingsDirectory and (g_modSettingsDirectory .. "/FS25_TransactionLog") or nil
     if modSettingsDir then
         createFolder(modSettingsDir)

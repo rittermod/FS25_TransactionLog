@@ -35,9 +35,11 @@ end
 ---@param transactions table array of transaction objects
 ---@param filename string filename for the CSV file (without path)
 ---@param directory string directory path where to save the file
+---@param rawV1 boolean|nil true to write legacy (v1) records verbatim, bypassing the
+---       key resolver (v1 already holds display text); false/nil resolves v2 keys
 ---@return boolean success true if export succeeded
 ---@return string message success/error message
-function RmTransactionLogExporter.exportToCSV(transactions, filename, directory)
+function RmTransactionLogExporter.exportToCSV(transactions, filename, directory, rawV1)
     -- Parameter validation
     if not transactions or type(transactions) ~= "table" then
         local msg = "Invalid transactions parameter for CSV export"
@@ -83,8 +85,17 @@ function RmTransactionLogExporter.exportToCSV(transactions, filename, directory)
         local realDateTime = RmTransactionLogExporter.escapeCSVField(transaction.realDateTime or "")
         local ingameDateTime = RmTransactionLogExporter.escapeCSVField(transaction.ingameDateTime or "")
         local farmId = transaction.farmId or 0
-        local transactionType = RmTransactionLogExporter.escapeCSVField(transaction.transactionType or "")
-        local incomeExpenditure = RmTransactionLogExporter.escapeCSVField(transaction.transactionStatistic or "")
+        -- v2 rows store keys (resolve on export); v1 migration rows store display text.
+        local typeText, categoryText
+        if rawV1 then
+            typeText = transaction.transactionType or ""
+            categoryText = transaction.transactionStatistic or ""
+        else
+            typeText = RmTransactionLog.resolveType(transaction.title, transaction.customEnv, transaction.constant)
+            categoryText = RmTransactionLog.resolveStatistic(transaction.statistic)
+        end
+        local transactionType = RmTransactionLogExporter.escapeCSVField(typeText)
+        local incomeExpenditure = RmTransactionLogExporter.escapeCSVField(categoryText)
         local amount = transaction.amount or 0
         local balance = transaction.currentFarmBalance or 0
         local comment = RmTransactionLogExporter.escapeCSVField(transaction.comment or "")
@@ -144,12 +155,13 @@ end
 ---@param transactions table array of transaction objects
 ---@param directory string directory path where to save the file
 ---@param suffix string optional suffix for the filename
+---@param rawV1 boolean|nil true to bypass the key resolver for legacy (v1) records
 ---@return boolean success true if export succeeded
 ---@return string message success/error message
 ---@return string filename the generated filename (only if successful)
-function RmTransactionLogExporter.exportWithAutoFilename(transactions, directory, suffix)
+function RmTransactionLogExporter.exportWithAutoFilename(transactions, directory, suffix, rawV1)
     local filename = RmTransactionLogExporter.generateFilename(nil, suffix)
-    local success, message = RmTransactionLogExporter.exportToCSV(transactions, filename, directory)
+    local success, message = RmTransactionLogExporter.exportToCSV(transactions, filename, directory, rawV1)
 
     if success then
         return true, message, filename
@@ -178,10 +190,11 @@ end
 
 ---Convenience function to export all current transactions
 ---@param suffix string optional suffix for the filename
+---@param rawV1 boolean|nil true to bypass the key resolver for legacy (v1) records
 ---@return boolean success true if export succeeded
 ---@return string message success/error message
 ---@return string filename the generated filename (only if successful)
-function RmTransactionLogExporter.exportCurrentTransactions(suffix)
+function RmTransactionLogExporter.exportCurrentTransactions(suffix, rawV1)
     local directory = RmTransactionLogExporter.getExportDirectory()
     if not directory then
         local msg = "No export directory available"
@@ -191,5 +204,5 @@ function RmTransactionLogExporter.exportCurrentTransactions(suffix)
     -- Get transactions from the main module
     local transactions = RmTransactionLog and RmTransactionLog.transactions or {}
 
-    return RmTransactionLogExporter.exportWithAutoFilename(transactions, directory, suffix)
+    return RmTransactionLogExporter.exportWithAutoFilename(transactions, directory, suffix, rawV1)
 end

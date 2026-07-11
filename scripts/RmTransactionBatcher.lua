@@ -57,25 +57,27 @@ function RmTransactionBatcher.shouldBatch(transactionStatistic)
     return RmTransactionBatcher.BATCHABLE_STATISTICS_SET[transactionStatistic] == true
 end
 
----Creates a batch key for grouping similar transactions
+---Creates a batch key for grouping transactions of the same money type per farm.
+---Keyed on the money type's runtime id (unique per type, unlike the shared
+---title/statistic), so VEHICLE_RUNNING_COSTS and VEHICLE_REPAIR batch separately.
+---The id is session-only (registration-order-dependent) - fine for an ephemeral batch.
 ---@param farmId number the farm ID
----@param transactionType string the transaction type
----@param transactionStatistic string the transaction statistic
+---@param moneyTypeId number|nil the money type's runtime id
 ---@return string the batch key
-function RmTransactionBatcher.createBatchKey(farmId, transactionType, transactionStatistic)
-    return string.format("%s|%s|%s", farmId, transactionType, transactionStatistic)
+function RmTransactionBatcher.createBatchKey(farmId, moneyTypeId)
+    return string.format("%s|%s", tostring(farmId), tostring(moneyTypeId))
 end
 
 ---Adds a transaction to the appropriate batch for later processing
 ---@param amount number transaction amount
 ---@param farmId number farm ID
----@param moneyTypeTitle string transaction type title
----@param moneyTypeStatistic string transaction statistic type
+---@param moneyType table money type (carries id/title/statistic/customEnv)
+---@param constant string|nil derived MoneyType constant name
 ---@param currentFarmBalance number current farm balance
 ---@param logFunction function function to call when batch is flushed
-function RmTransactionBatcher.addToBatch(amount, farmId, moneyTypeTitle, moneyTypeStatistic,
+function RmTransactionBatcher.addToBatch(amount, farmId, moneyType, constant,
                                          currentFarmBalance, logFunction)
-    local batchKey = RmTransactionBatcher.createBatchKey(farmId, moneyTypeTitle, moneyTypeStatistic)
+    local batchKey = RmTransactionBatcher.createBatchKey(farmId, moneyType.id)
     Log:debug(string.format("Adding to batch: %s amount: %s", batchKey, tostring(amount)))
 
     -- Check if we have too many active batches - flush oldest if needed
@@ -94,8 +96,10 @@ function RmTransactionBatcher.addToBatch(amount, farmId, moneyTypeTitle, moneyTy
             totalAmount = 0,
             count = 0,
             farmId = farmId,
-            moneyTypeTitle = moneyTypeTitle,
-            moneyTypeStatistic = moneyTypeStatistic,
+            title = moneyType.title,
+            statistic = moneyType.statistic,
+            customEnv = moneyType.customEnv,
+            constant = constant,
             lastBalance = currentFarmBalance,
             firstTimestamp = getDate("%Y-%m-%dT%H:%M:%S%z")
         }
@@ -112,8 +116,10 @@ function RmTransactionBatcher.addToBatch(amount, farmId, moneyTypeTitle, moneyTy
             totalAmount = amount,
             count = 1,
             farmId = farmId,
-            moneyTypeTitle = moneyTypeTitle,
-            moneyTypeStatistic = moneyTypeStatistic,
+            title = moneyType.title,
+            statistic = moneyType.statistic,
+            customEnv = moneyType.customEnv,
+            constant = constant,
             lastBalance = currentFarmBalance,
             firstTimestamp = getDate("%Y-%m-%dT%H:%M:%S%z")
         }
@@ -155,9 +161,9 @@ function RmTransactionBatcher.flushBatch(batchKey, logFunction)
         batchComment = string.format("Combined %d transactions", batch.count)
     end
 
-    -- Log the batched transaction with original title, batch info in comment
-    logFunction(batch.totalAmount, batch.farmId, batch.moneyTypeTitle,
-        batch.moneyTypeStatistic, batch.lastBalance, batchComment)
+    -- Log the batched transaction with the captured snapshot, batch info in comment
+    logFunction(batch.totalAmount, batch.farmId, batch.title, batch.statistic,
+        batch.customEnv, batch.constant, batch.lastBalance, batchComment)
 
     -- Clean up
     RmTransactionBatcher.batchTimers[batchKey] = nil

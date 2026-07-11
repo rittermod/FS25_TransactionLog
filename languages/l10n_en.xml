@@ -29,6 +29,10 @@
 file %s
 in folder %s"/>
         <text name="ui_transaction_log_export_error" text="Failed to export transactions to CSV file."/>
+        <text name="ui_transaction_log_migration_title" text="Transaction Log updated"/>
+        <text name="ui_transaction_log_migration_message" text="Your previous transaction log could not be carried over to the new version. It was exported to %s in the mod settings folder. A new transaction log has been started."/>
+        <text name="ui_transaction_log_migration_message_failed" text="Your previous transaction log could not be exported to CSV. The original file was backed up to %s. A new transaction log has been started."/>
+        <text name="ui_transaction_log_migration_message_failed_nobackup" text="Your previous transaction log could not be carried over or backed up. tl_transactions.xml will be overwritten the next time you save - copy it somewhere safe before saving. A new transaction log has been started."/>
         <text name="finance_loan" text="Loan"/>
         <text name="menu_TransactionLog_title" text="Transaction Log"/>
         <text name="setting_transactionlog_autoExportFrequency" text="Auto-Export to CSV"/>
