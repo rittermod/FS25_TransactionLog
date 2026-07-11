@@ -1,0 +1,4 @@
+# Test files (local only - symlink into the wrapper-root tests/ dir, dev-only).
+# Root-anchored so it only matches the submodule's scripts/tests symlink; keeping
+# it untracked is a load-bearing release guard (packaged builds carry no tests).
+/scripts/tests
