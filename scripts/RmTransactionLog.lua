@@ -49,6 +49,14 @@ local Log = RmLogging.getLogger("TransactionLog")
 -- 2 for the key-based storage model (snapshot money-type keys, resolve on display).
 RmTransactionLog.SCHEMA_VERSION = 2
 
+-- Server-side monotonic Int32 allocator for stable per-row transaction ids. Assigned
+-- in logTransaction (one id per FINAL row, batched rows numbered at flush), persisted
+-- as an additive `#id` attribute, and reconstructed as max+1 on load (single source of
+-- truth - never persisted as its own attribute). Set unconditionally on every load exit
+-- path; intentionally NOT reset when the log is cleared, so ids stay monotonic across a
+-- clear and a late batch flush can never reuse one.
+RmTransactionLog.nextTransactionId = 1
+
 -- Lazily-built map from a money type's runtime id to its MoneyType constant name
 -- (e.g. 60 -> "VEHICLE_RUNNING_COSTS"). Built on first capture, post-registration.
 RmTransactionLog.moneyTypeConstantById = nil
@@ -204,9 +212,14 @@ function RmTransactionLog.logTransaction(amount, farmId, title, statistic, custo
     local minute = g_currentMission.environment.currentMinute
     local ingameDateTime = string.format("%04d-%02d-%02d %02d:%02d", year, month, day, hour, minute)
     local realDateTime = getDate("%Y-%m-%dT%H:%M:%S%z")
+    -- Allocate the stable id AFTER the guards above so a rejected transaction never
+    -- burns one. Batched rows reach here at flush and are numbered in flush order.
+    local id = RmTransactionLog.nextTransactionId
+    RmTransactionLog.nextTransactionId = id + 1
     -- Store keys/identity RAW; resolve to display text only in the GUI/exporter.
     -- Empty customEnv/constant normalize to nil (never concat/getText onto nil).
     local transaction = {
+        id = id,
         realDateTime = realDateTime,
         ingameDateTime = ingameDateTime,
         farmId = farmId,
@@ -221,8 +234,8 @@ function RmTransactionLog.logTransaction(amount, farmId, title, statistic, custo
 
     table.insert(RmTransactionLog.transactions, transaction)
     Log:info(string.format(
-        "Transaction logged: %s %s | Farm ID: %s | Amount: %.2f | Title: %s | Statistic: %s | Constant: %s | Balance: %.2f",
-        transaction.realDateTime, transaction.ingameDateTime, transaction.farmId,
+        "Transaction logged: id=%d | %s %s | Farm ID: %s | Amount: %.2f | Title: %s | Statistic: %s | Constant: %s | Balance: %.2f",
+        transaction.id, transaction.realDateTime, transaction.ingameDateTime, transaction.farmId,
         transaction.amount, tostring(transaction.title), tostring(transaction.statistic),
         tostring(transaction.constant), transaction.currentFarmBalance))
     Log:trace("Transaction table size: %d", #RmTransactionLog.transactions)
@@ -450,9 +463,17 @@ function RmTransactionLog.saveToXmlFile(self)
         return
     end
     setXMLString(xmlFile, rootKey .. "#schemaVersion", tostring(RmTransactionLog.SCHEMA_VERSION))
+    -- Rows are written in master insertion order, which is ascending-id order (ids are
+    -- allocated monotonically at capture and the master is append-only, never sorted in
+    -- place - the GUI and the CSV exporter both sort COPIES). deriveLoadedIds preserves a
+    -- persisted id only if it is strictly greater than the running max, so it relies on
+    -- this ascending order; do NOT reorder the master before saving.
     local i = 0
     for _, transaction in ipairs(RmTransactionLog.transactions) do
         local transactionKey = string.format("%s.transactions.transaction(%d)", rootKey, i)
+        -- Additive `#id`: the row's real id (every in-memory row has a positive id,
+        -- assigned at capture or repaired on load), never a `... or 0` fallback.
+        setXMLInt(xmlFile, transactionKey .. "#id", transaction.id)
         setXMLString(xmlFile, transactionKey .. "#realDateTime", transaction.realDateTime or "")
         setXMLString(xmlFile, transactionKey .. "#ingameDateTime", transaction.ingameDateTime or "")
         setXMLInt(xmlFile, transactionKey .. "#farmId", transaction.farmId or 0)
@@ -472,8 +493,39 @@ function RmTransactionLog.saveToXmlFile(self)
     delete(xmlFile);
 end
 
+---Assigns a stable id to each SURVIVING loaded row, repairing any invalid persisted
+---`#id` in one pass. Pure: reads/writes only the passed `rows` (no module state), so the
+---id suite stays no-mutation. A row keeps its persisted id iff it is a number strictly
+---greater than the running max (post-id files are written in ascending id order, so valid
+---ids survive untouched); absent / non-numeric / 0 / negative / duplicate / out-of-order
+---ids all fold into the single `id <= maxId` repair branch and become max+1. A pre-id v2
+---file gets 1..N. Rows dropped upstream (missing amount/ingameDateTime) never reach here,
+---so their `#id` is not reserved.
+---@param rows table array of { id = integer|nil, ... }; each row.id is set in place
+---@return number nextId the counter to resume from (max+1; 1 when rows is empty)
+function RmTransactionLog.deriveLoadedIds(rows)
+    local maxId = 0
+    for _, r in ipairs(rows) do
+        local id = r.id
+        if type(id) ~= "number" or id <= maxId then
+            id = maxId + 1
+        end
+        r.id = id
+        maxId = id
+    end
+    return maxId + 1
+end
+
 ---Loads transactions from XML file in savegame directory
 function RmTransactionLog.loadFromXMLFile()
+    -- Start every load from a clean slate: the table + counter outlive g_currentMission
+    -- (only the mission is rebuilt between saves), so a second save loaded in one session
+    -- must not inherit the prior save's rows or id counter. Each exit path below sets the
+    -- counter unconditionally: fresh / no-file / unreadable -> 1, legacy -> migrateV1 sets
+    -- 1, v2 -> max+1 over the surviving rows.
+    RmTransactionLog.transactions = {}
+    RmTransactionLog.nextTransactionId = 1
+
     if not g_currentMission or not g_currentMission.missionInfo.savegameDirectory then
         Log:warning(
             "No current savegameDirectory available. No transactions to load. Ignore this if you are loading a new game.")
@@ -496,7 +548,7 @@ function RmTransactionLog.loadFromXMLFile()
     local rootKey = "RmTransactionLog"
 
     -- Detect the schema version BEFORE the record loop. A legacy (v1) file has no
-    -- schemaVersion; hand it to the clean-break migration and stop here.
+    -- schemaVersion; hand it to the clean-break migration (which sets the counter) and stop.
     local schemaVersionRaw = getXMLString(xmlFile, rootKey .. "#schemaVersion")
     if RmTransactionMigration.isLegacyVersion(schemaVersionRaw) then
         Log:info("Legacy transaction file detected (schemaVersion=%s); starting migration.",
@@ -507,8 +559,11 @@ function RmTransactionLog.loadFromXMLFile()
         return
     end
 
+    -- v2: read every surviving row into a local list (carrying its maybe-#id), derive
+    -- stable ids over the survivors in one pass, then commit them to the module table.
+    local rows = {}
     local i = 0
-    local loaded = 0
+    local skipped = 0
     while true do
         local transactionKey = string.format("%s.transactions.transaction(%d)", rootKey, i)
         if not hasXMLProperty(xmlFile, transactionKey) then
@@ -521,10 +576,13 @@ function RmTransactionLog.loadFromXMLFile()
         local ingameDateTime = getXMLString(xmlFile, transactionKey .. "#ingameDateTime")
         if amount == nil or ingameDateTime == nil then
             Log:error("Skipping malformed transaction at index %d (missing amount or ingameDateTime)", i - 1)
+            skipped = skipped + 1
         else
             local customEnv = getXMLString(xmlFile, transactionKey .. "#customEnv")
             local constant = getXMLString(xmlFile, transactionKey .. "#constant")
-            local transaction = {
+            table.insert(rows, {
+                -- getXMLInt -> integer|nil; deriveLoadedIds repairs nil / invalid below.
+                id = getXMLInt(xmlFile, transactionKey .. "#id"),
                 realDateTime = getXMLString(xmlFile, transactionKey .. "#realDateTime"),
                 ingameDateTime = ingameDateTime,
                 farmId = getXMLInt(xmlFile, transactionKey .. "#farmId"),
@@ -535,14 +593,19 @@ function RmTransactionLog.loadFromXMLFile()
                 constant = (constant ~= nil and constant ~= "" and constant) or nil,
                 currentFarmBalance = getXMLFloat(xmlFile, transactionKey .. "#currentFarmBalance") or 0,
                 comment = getXMLString(xmlFile, transactionKey .. "#comment") or "",
-            }
-            table.insert(RmTransactionLog.transactions, transaction)
-            loaded = loaded + 1
+            })
         end
     end
 
     delete(xmlFile)
-    Log:info(string.format("Transaction log loaded from XML file. Loaded %d transactions.", loaded))
+
+    -- Assign / repair ids over the survivors and resume the counter at max+1.
+    RmTransactionLog.nextTransactionId = RmTransactionLog.deriveLoadedIds(rows)
+    RmTransactionLog.transactions = rows
+
+    Log:info(string.format(
+        "Transaction log loaded from XML file. Loaded %d transactions (%d skipped); nextTransactionId=%d.",
+        #rows, skipped, RmTransactionLog.nextTransactionId))
 end
 
 function RmTransactionLog.loadMap(self)

@@ -66,9 +66,22 @@ function RmTransactionLogExporter.exportToCSV(transactions, filename, directory,
         return false, msg
     end
 
-    -- Sort transactions by in-game time, oldest first (chronological order for CSV)
-    table.sort(transactions, function(a, b)
-        return (a.ingameDateTime or "") < (b.ingameDateTime or "")
+    -- Sort a SHALLOW COPY, never the passed array: callers hand in the live
+    -- RmTransactionLog.transactions master, and sorting it in place would scramble the
+    -- insertion (= ascending-id) order that the save/load id round-trip relies on.
+    -- Oldest first (chronological CSV), with id as the tie-breaker so equal-minute rows
+    -- export in stable capture order rather than an arbitrary same-minute order.
+    -- v1 migration rows carry no id, so the tie-breaker is a harmless no-op for them.
+    local sorted = {}
+    for i, transaction in ipairs(transactions) do
+        sorted[i] = transaction
+    end
+    table.sort(sorted, function(a, b)
+        local ad, bd = a.ingameDateTime or "", b.ingameDateTime or ""
+        if ad ~= bd then
+            return ad < bd
+        end
+        return (a.id or 0) < (b.id or 0)
     end)
 
     -- Build full file path
@@ -80,8 +93,8 @@ function RmTransactionLogExporter.exportToCSV(transactions, filename, directory,
     -- Add CSV header
     table.insert(csvContent, "Real DateTime,In-game DateTime,Farm ID,Type,Income/Expenditure,Amount,Balance,Comment")
 
-    -- Add transaction rows
-    for _, transaction in ipairs(transactions) do
+    -- Add transaction rows (iterate the sorted copy, not the caller's array)
+    for _, transaction in ipairs(sorted) do
         local realDateTime = RmTransactionLogExporter.escapeCSVField(transaction.realDateTime or "")
         local ingameDateTime = RmTransactionLogExporter.escapeCSVField(transaction.ingameDateTime or "")
         local farmId = transaction.farmId or 0

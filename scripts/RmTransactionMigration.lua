@@ -247,8 +247,11 @@ function RmTransactionMigration.migrateV1(savegameFolderPath, v1Rows)
     Log:info("Migration outcome: %s (rows=%d, csv=%s, backup=%s)",
         outcome, rowCount, tostring(csvExported), tostring(rawBackedUp))
 
-    -- Reset to a fresh, empty v2 in-memory log.
+    -- Reset to a fresh, empty v2 in-memory log. The clean break starts ids at 1: there
+    -- are no v2 rows to carry an id, and the counter must not inherit a value from a
+    -- prior load in the same session (it outlives g_currentMission).
     RmTransactionLog.transactions = {}
+    RmTransactionLog.nextTransactionId = 1
 
     -- Write the v2 stub only when data was preserved (export/backup) or there was
     -- nothing to preserve (empty). On the nobackup path leave the v1 file INTACT so

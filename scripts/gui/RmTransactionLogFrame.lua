@@ -51,15 +51,22 @@ function RmTransactionLogFrame:onOpen()
     Log:trace("RmTransactionLogFrame:onOpen()")
     RmTransactionLogFrame:superClass().onOpen(self)
 
-    -- Get transactions from the main transaction log
+    -- Build the display list as a SHALLOW COPY of the master log: elements stay
+    -- references to the master records (so an id-resolved comment edit still lands),
+    -- but sorting the copy never scrambles the master's insertion order.
+    self.transactions = {}
     if RmTransactionLog.transactions then
-        self.transactions = RmTransactionLog.transactions
-        -- Sort transactions by in-game time, newest first
+        for i, transaction in ipairs(RmTransactionLog.transactions) do
+            self.transactions[i] = transaction
+        end
+        -- Newest first; deterministic within an equal minute by descending id.
         table.sort(self.transactions, function(a, b)
-            return (a.ingameDateTime or "") > (b.ingameDateTime or "")
+            local ad, bd = a.ingameDateTime or "", b.ingameDateTime or ""
+            if ad ~= bd then
+                return ad > bd
+            end
+            return (a.id or 0) > (b.id or 0)
         end)
-    else
-        self.transactions = {}
     end
 
     -- Update total transactions display
@@ -150,19 +157,35 @@ function RmTransactionLogFrame:onClickAddComment()
 
     local selectedTransaction = self.transactions[selectedIndex]
     if selectedTransaction then
+        -- Address the row by its stable id, not the display index: the display list is a
+        -- sorted copy, so selectedIndex does not map to the master's insertion order. This
+        -- is the addressing pattern TL-9's network layer builds on.
+        local targetId = selectedTransaction.id
+
         -- Create callback function to handle comment updates
         local function onCommentCallback(text, clickOk)
             if clickOk and text then
-                -- Update the transaction in the main log
-                if RmTransactionLog and RmTransactionLog.transactions and RmTransactionLog.transactions[selectedIndex] then
-                    RmTransactionLog.transactions[selectedIndex].comment = text
+                -- Resolve the master row by id (first match wins, defending against a stray
+                -- duplicate). In SP the display holds live master references so this always
+                -- succeeds; a miss is a defensive WARNING + no-op, never silent data loss.
+                local target = nil
+                if RmTransactionLog and RmTransactionLog.transactions then
+                    for _, row in ipairs(RmTransactionLog.transactions) do
+                        if row.id == targetId then
+                            target = row
+                            break
+                        end
+                    end
                 end
 
-                -- Update local transactions and refresh display
-                self.transactions[selectedIndex].comment = text
-                self.transactionTable:reloadData()
-
-                Log:debug(string.format("Comment updated for transaction: %s", text))
+                if target then
+                    target.comment = text
+                    self.transactionTable:reloadData()
+                    Log:debug(string.format("Comment updated for transaction id=%s: %s",
+                        tostring(targetId), text))
+                else
+                    Log:warning("Comment edit: no transaction with id=%s (no-op)", tostring(targetId))
+                end
             end
         end
 
