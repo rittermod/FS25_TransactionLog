@@ -151,6 +151,8 @@ end
 
 ---Writes all settings to XML file
 function RmTransactionLogSettings:writeSettings()
+    -- Server-authority guard: settings persistence is server-side; a client no-ops.
+    if g_server == nil then return end
     local key = "transactionLogSettings"
     local userSettingsFile = Utils.getFilename("FS25_TransactionLog.xml",
         g_modSettingsDirectory .. "/FS25_TransactionLog")
@@ -188,6 +190,8 @@ end
 
 ---Reads settings from XML file
 function RmTransactionLogSettings:readSettings()
+    -- Server-authority guard: settings persistence is server-side; a client no-ops.
+    if g_server == nil then return end
     local userSettingsFile = Utils.getFilename("FS25_TransactionLog.xml",
         g_modSettingsDirectory .. "/FS25_TransactionLog")
 

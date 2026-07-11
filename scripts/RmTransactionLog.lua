@@ -42,7 +42,7 @@ source(RmTransactionLog.dir .. "scripts/RmTransactionLogExporter.lua")
 source(RmTransactionLog.dir .. "scripts/RmTransactionMigration.lua")
 
 local Log = RmLogging.getLogger("TransactionLog")
--- Log:setLevel("DEBUG")  -- Uncomment to enable debug logging
+Log:setLevel("DEBUG") -- Uncomment to enable debug logging
 -- Log:setLevel("TRACE")  -- Uncomment to enable trace logging
 
 -- Schema version stamped on the root of the persisted transaction file. Bumped to
@@ -163,8 +163,6 @@ function RmTransactionLog.resolveStatistic(statistic)
     return g_i18n:getText("ui_transaction_log_no_data")
 end
 
-
-
 ---Logs a single transaction to the transaction log.
 ---Stores the money-type snapshot RAW (i18n keys + identity), never resolved text -
 ---display resolution happens in the GUI/exporter, keeping the log language-agnostic.
@@ -176,7 +174,8 @@ end
 ---@param constant string|nil derived MoneyType constant name (e.g. "VEHICLE_REPAIR")
 ---@param currentFarmBalance number current farm balance after transaction
 ---@param comment string|nil optional comment for the transaction
-function RmTransactionLog.logTransaction(amount, farmId, title, statistic, customEnv, constant, currentFarmBalance, comment)
+function RmTransactionLog.logTransaction(amount, farmId, title, statistic, customEnv, constant, currentFarmBalance,
+                                         comment)
     -- Parameter validation
     if amount == nil then
         Log:warning("logTransaction called with nil amount")
@@ -292,6 +291,8 @@ end
 
 ---Handles day change events for auto-export functionality
 function RmTransactionLog.onDayChanged(self)
+    -- Server-authority guard: auto-export runs on the server; a client no-ops.
+    if g_server == nil then return end
     local currentDate, currentMonth, currentYear = RmTransactionLog.getCurrentCalendarDate()
     local autoExportSetting = RmTransactionLog.settings:getValue("autoExportFrequency")
 
@@ -401,6 +402,8 @@ end
 ---@param amount number transaction amount
 ---@param moneyType table money type with title and statistic properties
 function RmTransactionLog.changeFarmBalance(self, amount, moneyType, ...)
+    -- Server-authority guard: a joining client no-ops here; SP/host/dedi are always authority.
+    if g_server == nil then return end
     Log:trace("Farm balance changed with parameters:")
     Log:trace(RmLogging.functionParametersToString(self, amount, moneyType, ...))
 
@@ -448,6 +451,8 @@ end
 
 ---Saves all transactions to XML file in savegame directory
 function RmTransactionLog.saveToXmlFile(self)
+    -- Server-authority guard: only the authority owns the savegame; a client no-ops.
+    if g_server == nil then return end
     Log:info("Saving transaction log to XML file...")
 
     -- Flush all pending batches before saving
@@ -525,6 +530,9 @@ function RmTransactionLog.loadFromXMLFile()
     -- 1, v2 -> max+1 over the surviving rows.
     RmTransactionLog.transactions = {}
     RmTransactionLog.nextTransactionId = 1
+
+    -- Server-authority guard: the reset above always runs; a client stops before savegame I/O.
+    if g_server == nil then return end
 
     if not g_currentMission or not g_currentMission.missionInfo.savegameDirectory then
         Log:warning(
