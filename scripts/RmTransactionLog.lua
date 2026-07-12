@@ -54,6 +54,7 @@ source(RmTransactionLog.dir .. "scripts/RmTransactionLogSync.lua")
 source(RmTransactionLog.dir .. "scripts/events/RmAddTransactionEvent.lua")
 source(RmTransactionLog.dir .. "scripts/events/RmTransactionSnapshotEvent.lua")
 source(RmTransactionLog.dir .. "scripts/events/RmEditCommentEvent.lua")
+source(RmTransactionLog.dir .. "scripts/events/RmSettingsChangeEvent.lua")
 
 local Log = RmLogging.getLogger("TransactionLog")
 Log:setLevel("DEBUG") -- Uncomment to enable debug logging
@@ -406,6 +407,163 @@ function RmTransactionLog.requestCommentEdit(id, comment)
     end
 end
 
+-- ============================================================
+-- Settings change transport (TL-14): server-authoritative apply + persist + broadcast,
+-- with join-time settings sync. The GUI calls requestSettingChange; the server is the boundary.
+-- ============================================================
+
+---UI-entry router for a settings change - the ONE seam RmTransactionLogControls.onMenuOptionChanged
+---calls. Settings-nil guarded (matches the requestCommentEdit / onMenuOptionChanged idiom - a change
+---before loadMap initialized settings is a quiet no-op). Splits by authority:
+---  * Authority (SP / listen-host, g_server ~= nil): apply + persist + broadcast directly via
+---    applySettingAuthoritative.
+---  * Pure client: send an RmSettingsChangeEvent REQUEST to the server (the security boundary),
+---    guarding BOTH g_client and the server connection for teardown. NO optimistic local apply (differs
+---    from TL-13's requestCommentEdit): a remote admin waits for the server's echoed broadcast. The
+---    control's visual state already advanced on the click, and the settings OBJECT self-heals on the
+---    next onFrameOpen (getStateIndex re-read) - settings changes are infrequent, so the round-trip is
+---    acceptable and avoids a rollback path.
+---@param id string setting id (a DEFINITIONS key)
+---@param value number the new enum value (integer)
+function RmTransactionLog.requestSettingChange(id, value)
+    if RmTransactionLog.settings == nil then
+        Log:debug("requestSettingChange: settings not initialized; ignoring change to %s", tostring(id))
+        return
+    end
+    -- Guard a non-numeric value at this public UI seam (mirrors requestCommentEdit's non-numeric-id
+    -- guard): the wire is Int32, and the client send would otherwise reach streamWriteInt32(nil) and
+    -- raise. The UI already guards value ~= nil; this defends the seam against a future caller.
+    if type(value) ~= "number" then
+        Log:debug("requestSettingChange: non-numeric value %s for %s; ignoring", tostring(value), tostring(id))
+        return
+    end
+    if g_server ~= nil then
+        RmTransactionLog.applySettingAuthoritative(id, value)
+    else
+        local serverConnection = g_client and g_client:getServerConnection()
+        if serverConnection ~= nil then
+            serverConnection:sendEvent(RmSettingsChangeEvent.new(id, value))
+        end
+    end
+end
+
+---Server apply (authority-only). ONLY ever entered under g_server ~= nil, which both callers
+---guarantee: requestSettingChange's authority branch AND handleSettingChangeRequest (after its master
+---gate). FIRST a no-op short-circuit - if value already equals settings:getValue(id), return without
+---persisting or broadcasting, because setValue returns true even for the already-current value (no
+---equality short-circuit lives in setValue), and a redundant admin click must NOT rewrite the XML nor
+---spam every client. Otherwise setValue is the second gate (rejects an unknown id / out-of-range
+---value); only on success persist (writeSettings, itself g_server-guarded) and g_server:broadcastEvent
+---the new value GLOBALLY - NOT broadcastEventToFarm, since settings are not farm-scoped. This is the
+---FIRST direct g_server:broadcastEvent in the mod (the row layer only uses broadcastEventToFarm); it
+---is the correct primitive for a global setting (@see Server.broadcastEvent). broadcastEvent defaults
+---sendLocal=false, so we mutate local state (setValue) FIRST then broadcast; the host loopback is
+---skipped, so the host never re-applies via applySettingFromNetwork. In SP / a listen-host with no
+---remote clients the broadcast is a behavioral no-op - SP persists exactly as before.
+---@param id string setting id
+---@param value number the new enum value
+function RmTransactionLog.applySettingAuthoritative(id, value)
+    local settings = RmTransactionLog.settings
+    if settings == nil then return end
+    if value == settings:getValue(id) then return end
+    if settings:setValue(id, value) then
+        settings:writeSettings()
+        g_server:broadcastEvent(RmSettingsChangeEvent.new(id, value))
+        RmTransactionLog.refreshSettingsControls()
+    end
+end
+
+---Server-side request handler - the SINGLE security boundary. Only reachable server-side (the
+---connection:getIsServer() == false branch of RmSettingsChangeEvent:run). Guard order mirrors
+---onPlayerFarmChanged and is load-bearing: g_server FIRST (getIsUserIdMasterUser asserts server-only,
+---so this guard is the invariant that keeps it in-context - a defensive call or a test mock without
+---isServer would otherwise raise); then g_currentMission / userManager non-nil (survive teardown - a
+---late network event during shutdown is exactly where an unguarded boundary nil-crashes); then resolve
+---the user and reject a nil user (unknown / torn-down connection) BEFORE user:getId(); then reject a
+---nil userId; then reject (DEBUG log + return) unless the sender is a MASTER USER via
+---userManager:getIsUserIdMasterUser(userId). NEVER the broken getIsConnectionMasterUser stub (it
+---always returns false) and NEVER Farm:isUserFarmManager.
+---There is no master short-circuit for a remote admin the way getHasPlayerPermission has, which is why
+---settings uses the direct userId check, not a farm-permission call. On pass, applySettingAuthoritative.
+---This is the single boundary for REMOTE (client-origin) requests; the local authority path
+---(requestSettingChange under g_server ~= nil) is the trusted machine and applies directly, skipping
+---this gate by design (the host is inherently privileged).
+---@param connection table the requesting client's connection
+---@param id string setting id
+---@param value number the new enum value
+function RmTransactionLog.handleSettingChangeRequest(connection, id, value)
+    if g_server == nil then return end
+    local mission = g_currentMission
+    if mission == nil or mission.userManager == nil then return end
+    local user = mission.userManager:getUserByConnection(connection)
+    if user == nil then
+        Log:debug("handleSettingChangeRequest: no user for connection; dropping change")
+        return
+    end
+    local userId = user:getId()
+    if userId == nil then
+        Log:debug("handleSettingChangeRequest: user has no id; dropping change")
+        return
+    end
+    if not mission.userManager:getIsUserIdMasterUser(userId) then
+        Log:debug("handleSettingChangeRequest: user %s is not a master user; dropping change", tostring(userId))
+        return
+    end
+    RmTransactionLog.applySettingAuthoritative(id, value)
+end
+
+---Client apply of the server's authoritative broadcast (the server-origin branch of run). Validates +
+---sets via settings:applyFromNetwork (NO persist - persistence is server-only), then repaints an open
+---settings frame. Only reached on a pure client: the broadcast uses sendLocal=false and the join send
+---skips the loopback, so the host never enters this path.
+---@param id string setting id
+---@param value number the new enum value
+function RmTransactionLog.applySettingFromNetwork(id, value)
+    local settings = RmTransactionLog.settings
+    if settings == nil then return end
+    settings:applyFromNetwork(id, value)
+    RmTransactionLog.refreshSettingsControls()
+end
+
+---Send ONE joining connection the CURRENT value of every settings menu item (one RmSettingsChangeEvent
+---per MENU_ITEMS id) so its menu shows the truth on join. Guards FIRST - authority (g_server), a
+---non-nil connection, and a NON-loopback connection (getIsLocal, the concrete host-skip mirroring
+---sendSnapshotToConnection) - then settings non-nil. connection:sendEvent to one resolved connection is
+---the base-game single-target idiom (@see FinanceStatsEvent inside sendInitialClientState), NOT the
+---per-farm broadcastEventToFarm. Settings are GLOBAL (not farm-scoped), so onSendInitialClientState
+---calls this for EVERY joiner incl. a spectator, BEFORE the transaction-snapshot's farm-0 gate.
+---@param connection table the joining client's connection
+function RmTransactionLog.sendSettingsToConnection(connection)
+    if g_server == nil or connection == nil or connection:getIsLocal() then return end
+    local settings = RmTransactionLog.settings
+    if settings == nil then return end
+    for _, id in ipairs(RmTransactionLogSettings.MENU_ITEMS) do
+        -- getValue returns nil for a MENU_ITEMS id absent from DEFINITIONS (a config drift); skip it
+        -- rather than feed streamWriteInt32(nil) and crash the whole join initial-state send.
+        local value = settings:getValue(id)
+        if value ~= nil then
+            connection:sendEvent(RmSettingsChangeEvent.new(id, value))
+        end
+    end
+end
+
+---Repaint the settings controls to match the current settings object, after an authoritative apply or
+---a broadcast apply. CONTROLS-empty / control-nil safe (harmless on a headless dedicated server where
+---CONTROLS is never populated - the file-scope menu bootstrap is the pre-existing GUI-presence concern,
+---not this helper's responsibility). setState does NOT fire onClickCallback (onFrameOpen already calls
+---setState(getStateIndex(id)) on every open without re-saving, RmTransactionLog.lua onFrameOpen), so
+---this has no callback side effect / re-entrancy and does not re-persist.
+function RmTransactionLog.refreshSettingsControls()
+    local settings = RmTransactionLog.settings
+    if settings == nil then return end
+    for _, id in ipairs(RmTransactionLogSettings.MENU_ITEMS) do
+        local control = RmTransactionLog.CONTROLS[id]
+        if control ~= nil then
+            control:setState(settings:getStateIndex(id))
+        end
+    end
+end
+
 ---Shows the transaction log GUI dialog
 function RmTransactionLog.showTransactionLog()
     Log:debug("Showing transaction log GUI")
@@ -651,9 +809,11 @@ function RmTransactionLog.changeFarmBalance(self, amount, moneyType, ...)
     end
 end
 
----Join delivery (TL-11): on a client finishing its initial sync, send it a snapshot of ONLY its
----own farm's history. Appended to FSBaseMission.sendInitialClientState (server-side; the base game
----resolves `farm` via getFarmForUniqueUserId and passes it in). Skips spectator farm 0, mirroring
+---Join delivery: on a client finishing its initial sync, send it (TL-14) the current settings -
+---GLOBALLY, before the farm gate, so even a spectator's menu shows the truth - then (TL-11) a snapshot
+---of ONLY its own farm's history. Appended to FSBaseMission.sendInitialClientState (server-side; the
+---base game resolves `farm` via getFarmForUniqueUserId and passes it in). Skips spectator farm 0 for
+---the TRANSACTION snapshot only (settings still go out), mirroring
 ---how the base game skips its per-farm finance-stat send for the spectator farm (@see
 ---FSBaseMission.sendInitialClientState): a joining spectator's client store was already reset to {}
 ---by loadFromXMLFile before the client's g_server bail, so there is nothing to clear. The rest
@@ -664,6 +824,9 @@ end
 ---@param farm table|nil the user's farm (nil / farmId 0 -> spectator, no snapshot)
 function RmTransactionLog.onSendInitialClientState(self, connection, user, farm)
     if g_server == nil then return end
+    -- Settings sync (TL-14) is GLOBAL - every joiner incl. a spectator gets current settings, so it
+    -- MUST sit AFTER the g_server guard but BEFORE the farm-0 return (order is load-bearing).
+    RmTransactionLog.sendSettingsToConnection(connection)
     if farm == nil or farm.farmId == 0 then return end
     RmTransactionLogSync.sendSnapshotToConnection(connection, farm.farmId)
 end
@@ -994,16 +1157,11 @@ function RmTransactionLogControls.onMenuOptionChanged(self, state, menuOption)
 
     if value ~= nil then
         Log:debug("SET " .. id .. " = " .. tostring(value))
-        -- Settings are initialized in loadMap() and should be available during UI interactions
-        if RmTransactionLog.settings then
-            if RmTransactionLog.settings:setValue(id, value) then
-                RmTransactionLog.settings:writeSettings()
-            else
-                Log:error("Failed to set setting " .. id .. ", not saving settings")
-            end
-        else
-            Log:error("Settings not initialized, cannot save setting: " .. id)
-        end
+        -- TL-14: route the change through the server-authoritative seam instead of applying + persisting
+        -- inline. On the authority (SP / listen-host) requestSettingChange applies + persists + broadcasts;
+        -- on a pure client it sends the request to the server (the security boundary). The settings-nil
+        -- guard now lives in requestSettingChange (no client may persist, so no inline writeSettings here).
+        RmTransactionLog.requestSettingChange(id, value)
     end
 end
 

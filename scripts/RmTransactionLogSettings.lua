@@ -81,6 +81,18 @@ function RmTransactionLogSettings:setValue(id, value)
     return true
 end
 
+---Applies a setting value received from the server's authoritative broadcast (TL-14 client path).
+---Validates + sets via setValue but NEVER persists: writeSettings is server-only (its own g_server
+---guard makes a client call a no-op), and a client must not write the server's file. This is an
+---intent-revealing wrapper so the client apply path (RmTransactionLog.applySettingFromNetwork) reads
+---as a network apply, not a local edit.
+---@param id string setting identifier
+---@param value any value to set (an integer enum code on the wire)
+---@return boolean success the setValue result (false if id unknown / value out of range)
+function RmTransactionLogSettings:applyFromNetwork(id, value)
+    return self:setValue(id, value)
+end
+
 ---Gets a setting value
 ---@param id string setting identifier
 ---@return any the setting value
