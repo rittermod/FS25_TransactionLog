@@ -8,7 +8,10 @@ local RmTransactionLogFrame_mt = Class(RmTransactionLogFrame, MessageDialog)
 local Log = RmLogging.getLogger("TransactionLog")
 
 -- Constants
-RmTransactionLogFrame.MAX_COMMENT_LENGTH = 200 -- Maximum characters allowed in comment input
+-- Canonical comment length lives in RmTransactionLog (event-reachable); the frame references it so
+-- the GUI input cap and the server-side clamp can never drift. RmTransactionLog is defined and its
+-- constant set before this file is sourced (see the source() chain in RmTransactionLog.lua).
+RmTransactionLogFrame.MAX_COMMENT_LENGTH = RmTransactionLog.MAX_COMMENT_LENGTH
 
 -- UI Color constants (cached for performance)
 RmTransactionLogFrame.POSITIVE_COLOR = { 0, 0.8, 0, 1 }     -- Darker green for positive amounts
@@ -94,10 +97,11 @@ function RmTransactionLogFrame.resolveSpectatorHint()
     return RmTransactionLogFrame.SPECTATOR_HINT_FALLBACK
 end
 
-function RmTransactionLogFrame:onOpen()
-    Log:trace("RmTransactionLogFrame:onOpen()")
-    RmTransactionLogFrame:superClass().onOpen(self)
-
+---Rebuilds the display list from the master and repaints the table + total + spectator hint. This
+---is the DATA half of onOpen, extracted so RmTransactionLog.refreshOpenLog can repaint an already-open
+---frame after a comment edit lands (locally or via the server's broadcast) without a reopen. Does NOT
+---touch focus or the sound-suppressed bracket - those are open-time concerns only.
+function RmTransactionLogFrame:refreshData()
     -- Farm-scope the view through the shared pure filter: defence-in-depth on a pure client (its
     -- store is already scoped by the join/switch snapshot) and a real narrowing on a listen-host
     -- whose master holds every farm. In SP getFarmId() is 1 and only farm 1 exists, so the filter
@@ -122,6 +126,31 @@ function RmTransactionLogFrame:onOpen()
 
     -- Reload the table data
     self.transactionTable:reloadData()
+end
+
+function RmTransactionLogFrame:onOpen()
+    Log:trace("RmTransactionLogFrame:onOpen()")
+    RmTransactionLogFrame:superClass().onOpen(self)
+
+    -- Mark the log open so RmTransactionLog.refreshOpenLog can repaint THIS instance after a comment
+    -- edit lands (locally or via the server broadcast). Cleared in onClose. Independent of any g_gui
+    -- name field (a dialog never sets currentGuiName).
+    self.isLogOpen = true
+
+    -- Role-gate the manager-only actions (TL-13): show Add Comment + Export only to a farm manager,
+    -- hide them for a worker / spectator. In SP + on the listen-host the local player always resolves
+    -- as a manager, so both stay visible (no SP regression). The button gate is UX; the server is the
+    -- security boundary for the edit. setVisible(isManager) also re-shows on a later open of this
+    -- reused instance. Nil-guarded like the emptyHintText binding: a nil control is a fat-fingered id.
+    local isManager = RmTransactionLog.isLocalPlayerFarmManager()
+    if self.buttonAddComment ~= nil then
+        self.buttonAddComment:setVisible(isManager)
+    end
+    if self.buttonExportCSV ~= nil then
+        self.buttonExportCSV:setVisible(isManager)
+    end
+
+    self:refreshData()
 
     -- Set focus to the table
     self:setSoundSuppressed(true)
@@ -131,6 +160,7 @@ end
 
 function RmTransactionLogFrame:onClose()
     Log:trace("RmTransactionLogFrame:onClose()")
+    self.isLogOpen = false
     self.transactions = {}
     RmTransactionLogFrame:superClass().onClose(self)
 end
@@ -196,6 +226,14 @@ end
 function RmTransactionLogFrame:onClickAddComment()
     Log:trace("RmTransactionLogFrame:onClickAddComment()")
 
+    -- Re-check the role gate at entry (TL-13): the button is hidden for a non-manager, but a keybind
+    -- or focus path could still reach the handler, so bail defensively. The server re-validates the
+    -- actual edit; this is client-side defense-in-depth.
+    if not RmTransactionLog.isLocalPlayerFarmManager() then
+        Log:debug("onClickAddComment: local player is not a farm manager; ignoring")
+        return
+    end
+
     -- Get the selected transaction
     local selectedIndex = self.transactionTable.selectedIndex
     if selectedIndex == nil or selectedIndex < 1 or selectedIndex > #self.transactions then
@@ -213,27 +251,17 @@ function RmTransactionLogFrame:onClickAddComment()
         -- Create callback function to handle comment updates
         local function onCommentCallback(text, clickOk)
             if clickOk and text then
-                -- Resolve the master row by id (first match wins, defending against a stray
-                -- duplicate). In SP the display holds live master references so this always
-                -- succeeds; a miss is a defensive WARNING + no-op, never silent data loss.
-                local target = nil
-                if RmTransactionLog and RmTransactionLog.transactions then
-                    for _, row in ipairs(RmTransactionLog.transactions) do
-                        if row.id == targetId then
-                            target = row
-                            break
-                        end
-                    end
-                end
-
-                if target then
-                    target.comment = text
-                    self.transactionTable:reloadData()
-                    Log:debug(string.format("Comment updated for transaction id=%s: %s",
-                        tostring(targetId), text))
-                else
-                    Log:warning("Comment edit: no transaction with id=%s (no-op)", tostring(targetId))
-                end
+                -- Route the edit through the single server-authoritative request path (TL-13):
+                -- it normalizes the comment, applies to the master by the captured STABLE id (never
+                -- the display index), and - in MP on a pure client - asks the server to authorize
+                -- (owning farm + farmManager role) and fan the clamped value out to the farm's
+                -- members. In SP / on the listen-host it applies directly. Keep the local reloadData
+                -- so THIS frame repaints immediately; the request path also repaints via
+                -- refreshOpenLog, and the two are idempotent.
+                RmTransactionLog.requestCommentEdit(targetId, text)
+                self.transactionTable:reloadData()
+                Log:debug(string.format("Comment edit requested for transaction id=%s: %s",
+                    tostring(targetId), text))
             end
         end
 
@@ -290,6 +318,14 @@ end
 function RmTransactionLogFrame:onClickExportCSV()
     Log:trace("RmTransactionLogFrame:onClickExportCSV()")
 
+    -- Re-check the role gate at entry (TL-13): the button is hidden for a non-manager, but a keybind
+    -- or focus path could still reach the handler, so bail defensively. Export is client-local; this
+    -- keeps a worker from exporting via a stray path, matching the Add Comment gate.
+    if not RmTransactionLog.isLocalPlayerFarmManager() then
+        Log:debug("onClickExportCSV: local player is not a farm manager; ignoring")
+        return
+    end
+
     -- Export only THIS client's farm, re-derived from the LIVE farm inside the exporter (so a stale
     -- display after a farm switch cannot leak or misreport). Branch on the exporter's own empty
     -- result, not the display count: the old #self.transactions pre-guard was stale (a
@@ -333,6 +369,10 @@ function RmTransactionLogFrame.register()
     Log:trace("RmTransactionLogFrame.register()")
     local dialog = RmTransactionLogFrame.new(g_i18n)
     g_gui:loadGui(RmTransactionLog.dir .. "gui/RmTransactionLogFrame.xml", "RmTransactionLogFrame", dialog)
+    -- Keep the singleton instance so RmTransactionLog.refreshOpenLog can repaint it after a comment
+    -- edit lands while it is open (mirrors RmCommentInputDialog.INSTANCE). One dialog is created here
+    -- and reused across every showDialog, so this reference stays valid for the session.
+    RmTransactionLogFrame.INSTANCE = dialog
 end
 
 -- Static function to show the transaction log dialog

@@ -10,6 +10,13 @@ local RmTransactionLog_mt = Class(RmTransactionLog)
 RmTransactionLog.START_YEAR = 2025      -- Start year for the transaction log (Year 1 = 2025)
 RmTransactionLog.UPDATE_INTERVAL = 1000 -- Check batches every 1 second (1000ms)
 
+-- Canonical maximum comment length (codepoints). This is the SINGLE source of truth for the
+-- 200-char cap: the GUI input dialog references it (RmTransactionLogFrame.MAX_COMMENT_LENGTH) and
+-- the server-authoritative edit path re-clamps to it, so a crafted RmEditCommentEvent can never
+-- persist an oversized comment. Defined BEFORE the source() chain below so the frame, sourced
+-- there, can read it at load time.
+RmTransactionLog.MAX_COMMENT_LENGTH = 200
+
 -- Table to store transactions at the module level.
 -- This mod is single instance.
 RmTransactionLog.transactions = {}
@@ -46,6 +53,7 @@ source(RmTransactionLog.dir .. "scripts/RmTransactionMigration.lua")
 source(RmTransactionLog.dir .. "scripts/RmTransactionLogSync.lua")
 source(RmTransactionLog.dir .. "scripts/events/RmAddTransactionEvent.lua")
 source(RmTransactionLog.dir .. "scripts/events/RmTransactionSnapshotEvent.lua")
+source(RmTransactionLog.dir .. "scripts/events/RmEditCommentEvent.lua")
 
 local Log = RmLogging.getLogger("TransactionLog")
 Log:setLevel("DEBUG") -- Uncomment to enable debug logging
@@ -262,6 +270,140 @@ function RmTransactionLog.logTransaction(amount, farmId, title, statistic, custo
     -- the client list is empty and the native send skips the host loopback -- so SP is behaviorally
     -- unchanged; real cross-client delivery begins only when the MP flag flips at TL-12.
     RmTransactionLogSync.sendToFarm(transaction.farmId, RmAddTransactionEvent.new(transaction))
+end
+
+-- ============================================================
+-- Comment editing (TL-13): server-authoritative, addressed by stable id
+-- ============================================================
+
+---Clamp a comment to MAX_COMMENT_LENGTH codepoints and coerce nil -> "". Codepoint-safe via the
+---engine utf8 globals (utf8Strlen / utf8Substr, whose start is 0-based) so a multi-byte comment is
+---truncated on a character boundary, never mid-sequence. An empty string is a valid CLEARED comment
+---(distinct from the nil coalesce). This is the ONE clamp both sides run through - the client before
+---its optimistic apply + send, the server before applying + re-broadcasting a (possibly crafted)
+---event - so an oversized or nil comment can never reach the master list.
+---@param comment string|nil raw comment (possibly oversized, possibly nil)
+---@return string clamped comment ("" when nil)
+function RmTransactionLog.clampComment(comment)
+    if comment == nil then
+        return ""
+    end
+    if type(comment) ~= "string" then
+        comment = tostring(comment)
+    end
+    -- utf8Strlen / utf8Substr are engine globals present whenever the mod runs (in-game only). Guard
+    -- their presence defensively so a non-game host degrades to a byte clamp instead of raising.
+    if utf8Strlen ~= nil and utf8Substr ~= nil then
+        if utf8Strlen(comment) > RmTransactionLog.MAX_COMMENT_LENGTH then
+            return utf8Substr(comment, 0, RmTransactionLog.MAX_COMMENT_LENGTH)
+        end
+        return comment
+    end
+    if #comment > RmTransactionLog.MAX_COMMENT_LENGTH then
+        return string.sub(comment, 1, RmTransactionLog.MAX_COMMENT_LENGTH)
+    end
+    return comment
+end
+
+---Find the master row with the given stable id (first match wins - a stray duplicate resolves
+---deterministically to the earliest-inserted row). Rows are addressed by id, NEVER by display index
+---(the GUI display list is a sorted copy). PURE - reads the module master, mutates nothing.
+---@param id number the stable transaction id
+---@return table|nil row the master row, or nil when absent (cleared / not yet delivered)
+function RmTransactionLog.findRowById(id)
+    for _, row in ipairs(RmTransactionLog.transactions) do
+        if row.id == id then
+            return row
+        end
+    end
+    return nil
+end
+
+---Apply a comment to the master row addressed by stable id (first match wins). Clamps the comment
+---(codepoint-safe, nil -> "") before writing, so every write path lands a normalized value. Returns
+---whether a row was found: the server skips its re-broadcast when this returns false (the row
+---vanished between validate and apply).
+---@param id number the stable transaction id
+---@param comment string|nil the new comment (clamped here)
+---@return boolean found true when a row matched and was updated
+function RmTransactionLog.applyCommentById(id, comment)
+    local row = RmTransactionLog.findRowById(id)
+    if row == nil then
+        return false
+    end
+    row.comment = RmTransactionLog.clampComment(comment)
+    return true
+end
+
+---Whether the LOCAL player may manage this farm - the Add Comment / Export button gate. Delegates
+---to the verified engine permission check with NO connection / farmId, which resolves the local
+---player: on SP + listen-host (getIsServer() and connection == nil) it short-circuits true, else it
+---returns player.isFarmManager or the "farmManager" permission flag. So SP is unchanged (always a
+---manager) and a pure client's workers are gated out. NEVER Farm:isUserFarmManager (it always
+---returns false, so it cannot report manager status). Nil-safe for teardown / headless (no mission -> not a manager).
+---@return boolean isManager
+function RmTransactionLog.isLocalPlayerFarmManager()
+    if g_currentMission == nil then
+        return false
+    end
+    return g_currentMission:getHasPlayerPermission("farmManager")
+end
+
+---Repaint the transaction-log frame when it is open, so an applied comment shows without a reopen.
+---Best-effort and headless-safe: a no-op before the frame instance exists or when the log is closed.
+---Gated on the frame's own `isLogOpen` flag (set in onOpen / cleared in onClose), NOT on
+---`g_gui.currentGuiName` - showing a `MessageDialog` via `showDialog` updates `currentDialogName`,
+---not `currentGuiName` (only a full-screen change sets that), so a name check would never match and
+---the refresh would be dead. The flag is also robust to a comment dialog layered on top. The editing
+---client's own repaint is ALSO guaranteed by the GUI callback's reloadData; this additionally covers
+---a farm member who receives the server's broadcast with the log already open.
+function RmTransactionLog.refreshOpenLog()
+    local frame = RmTransactionLogFrame ~= nil and RmTransactionLogFrame.INSTANCE or nil
+    if frame ~= nil and frame.isLogOpen and frame.refreshData ~= nil then
+        frame:refreshData()
+    end
+end
+
+---Request a comment edit for the row addressed by stable id - the ONE entry point the GUI calls.
+---Normalizes the comment once (codepoint clamp, nil -> ""), then splits by authority:
+---  * Authority (SP / listen-host): the local player already passed the button gate, so apply to
+---    the master by id, repaint, and re-broadcast the clamped value to that farm's members
+---    (sendToFarm is a no-op in SP - empty client list - and skips the host loopback in MP).
+---  * Pure client: apply OPTIMISTICALLY by id + repaint, then send RmEditCommentEvent to the
+---    server, which is the security boundary (it re-validates farm ownership + the farmManager role,
+---    then re-broadcasts). NO rollback on a server reject (accepted residual): a gated manager is
+---    never rejected, and a crafted reject is display-only and self-heals on the next TL-11 snapshot.
+---@param id number the stable transaction id of the row to edit
+---@param comment string|nil the new comment (normalized here)
+function RmTransactionLog.requestCommentEdit(id, comment)
+    -- Guard a non-numeric id: a captured row always carries a numeric id, but a stray / orphan row
+    -- with none would otherwise reach `streamWriteInt32(nil)` on the pure-client send and raise a
+    -- script error. Quiet DEBUG drop, matching every other rejection in this feature.
+    if type(id) ~= "number" then
+        Log:debug("requestCommentEdit: non-numeric id %s; ignoring", tostring(id))
+        return
+    end
+    local normalized = RmTransactionLog.clampComment(comment)
+    if g_server ~= nil then
+        -- Authority: apply directly to the master, then fan out to the farm's remote members.
+        if RmTransactionLog.applyCommentById(id, normalized) then
+            RmTransactionLog.refreshOpenLog()
+            local row = RmTransactionLog.findRowById(id)
+            if row ~= nil then
+                RmTransactionLogSync.sendToFarm(row.farmId, RmEditCommentEvent.new(id, normalized))
+            end
+        end
+    else
+        -- Pure client: optimistic local apply, then ask the server to authorize + persist.
+        RmTransactionLog.applyCommentById(id, normalized)
+        RmTransactionLog.refreshOpenLog()
+        if g_client ~= nil then
+            local serverConnection = g_client:getServerConnection()
+            if serverConnection ~= nil then
+                serverConnection:sendEvent(RmEditCommentEvent.new(id, normalized))
+            end
+        end
+    end
 end
 
 ---Shows the transaction log GUI dialog

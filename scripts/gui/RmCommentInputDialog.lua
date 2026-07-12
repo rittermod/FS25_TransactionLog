@@ -14,7 +14,9 @@ function RmCommentInputDialog.register()
     local dialog = RmCommentInputDialog.new()
     g_gui:loadGui(RmTransactionLog.dir .. "gui/RmCommentInputDialog.xml", "RmCommentInputDialog", dialog)
     RmCommentInputDialog.INSTANCE = dialog
-    dialog.textElement.maxCharacters = 200
+    -- Single-source the input cap from the canonical constant (register runs at loadMap, so it is
+    -- set). The frame also passes it via show(); this default keeps any other show path in sync.
+    dialog.textElement.maxCharacters = RmTransactionLog.MAX_COMMENT_LENGTH
 end
 
 ---Shows the comment input dialog
