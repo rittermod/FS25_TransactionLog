@@ -805,6 +805,41 @@ function RmTransactionLog.filterTransactionsByFarm(transactions, farmId)
     return filtered
 end
 
+---Collects the DISTINCT real farm ids present in a transaction array, ASCENDING. PURE: no module
+---state, returns a NEW array. A "real" farm id is a NUMBER that is an INTEGER in
+---[1, FarmManager.MAX_NUM_FARMS]. The type guard runs BEFORE any numeric compare so a non-number
+---farmId (e.g. a loaded "2") can never RAISE on `<= 0`. This deliberately mirrors the capture guard
+---in changeFarmBalance (rejects nil / <= 0 / > MAX_NUM_FARMS) and the filterTransactionsByFarm
+---quarantine: nil / spectator (0) / negative / non-integer / out-of-range ids are excluded, so a
+---corrupt or legacy row can never spawn a spurious per-farm export or crash the boundary. The ids
+---returned are exactly those for which filterTransactionsByFarm(transactions, id) is non-empty --
+---so each collected farm is guaranteed >= 1 row when sliced (the auto-export loop relies on this).
+---@param transactions table|nil array of transaction objects
+---@return table ids a new ascending array of the distinct real farm ids present (empty for nil/empty input)
+function RmTransactionLog.collectFarmIds(transactions)
+    local ids = {}
+    if transactions == nil then
+        return ids
+    end
+
+    local seen = {}
+    for _, transaction in ipairs(transactions) do
+        local fid = transaction.farmId
+        -- Type guard FIRST: a non-number farmId must not reach `<= 0` (that would raise). Then an
+        -- integer + [1, MAX_NUM_FARMS] bound, matching the capture guard.
+        if type(fid) == "number" and fid == math.floor(fid)
+            and fid >= 1 and fid <= FarmManager.MAX_NUM_FARMS then
+            if not seen[fid] then
+                seen[fid] = true
+                ids[#ids + 1] = fid
+            end
+        end
+    end
+
+    table.sort(ids)
+    return ids
+end
+
 ---Generates auto-export filename suffix based on type and period
 ---@param exportType string "daily", "monthly", or "yearly"
 ---@param periodIdentifier string date pattern (e.g., "2024-12-09", "2024-12", "2024")
@@ -823,7 +858,21 @@ function RmTransactionLog.generateAutoExportSuffix(exportType, periodIdentifier)
     return "auto_unknown"
 end
 
----Performs auto-export for specified period
+---Performs auto-export for the specified period -- ONE CSV per farm (TL-16). The server boundary CSV
+---is split per farm so no single file mixes two farms' rows (research s12 decision 2; closes G10 on
+---the auto-export path, the counterpart to the manual export TL-12 already farm-scoped). Flow: flush
+---batches ONCE, filter the master to this PERIOD once, resolve the export directory once, then iterate
+---the DISTINCT real farms present in the period rows -- each sliced through the SAME pure
+---filterTransactionsByFarm seam and written with a farm-disambiguated suffix. Each per-farm export is
+---wrapped in pcall so one bad farm (a false return OR a raise from a malformed row) is logged and the
+---remaining farms still export.
+---
+---Server-authority is unchanged: the g_server guard stays at onDayChanged (TL-8). This function is
+---module-INTERNAL (test-visible, no new production caller), so the redundant in-function g_server guard
+---is intentionally omitted -- onDayChanged is the sole authority boundary. Farms are derived from the
+---ROWS (collectFarmIds), never getFarmId(): a dedicated server has no local farm (G2). Singleplayer is
+---behaviourally identical bar the filename gaining a `farm1` token (one farm -> one file; within-file
+---row order is unchanged because exportToCSV sorts a shallow copy by (ingameDateTime, id)).
 ---@param exportType string "daily", "monthly", or "yearly"
 ---@param periodIdentifier string date pattern for the period to export
 function RmTransactionLog.performAutoExport(exportType, periodIdentifier)
@@ -832,34 +881,68 @@ function RmTransactionLog.performAutoExport(exportType, periodIdentifier)
     -- Flush all pending batches before exporting to ensure we capture all transactions
     RmTransactionBatcher.flushAllBatches(RmTransactionLog.logTransaction)
 
-    -- Filter transactions from the specified period only
+    -- Filter transactions from the specified period only (once, for all farms)
     local allTransactions = RmTransactionLog.transactions or {}
-    local filteredTransactions = RmTransactionLog.filterTransactionsByPeriod(allTransactions, periodIdentifier)
+    local periodRows = RmTransactionLog.filterTransactionsByPeriod(allTransactions, periodIdentifier)
 
-    if #filteredTransactions == 0 then
+    if #periodRows == 0 then
         Log:info(string.format("No transactions found for %s auto-export period: %s",
             exportType, periodIdentifier))
         return
     end
 
-    -- Generate auto-export filename based on type
-    local suffix = RmTransactionLog.generateAutoExportSuffix(exportType, periodIdentifier)
-    local directory = RmTransactionLogExporter.getExportDirectory()
+    -- Distinct real farms present in the period. collectFarmIds quarantines orphan/spectator/malformed
+    -- farmIds, so every id here is guaranteed to slice a NON-EMPTY set -- the exporter never sees an
+    -- empty set from this path (whose NO_DATA_MESSAGE would otherwise be misread as a write failure).
+    local farmIds = RmTransactionLog.collectFarmIds(periodRows)
+    if #farmIds == 0 then
+        -- The period had rows but none carried a real farmId (all orphan/spectator/malformed).
+        -- Distinct wording from the empty-period message so an operator can tell the two apart.
+        Log:info(string.format("Auto-export (%s) found no real-farm rows for period: %s",
+            exportType, periodIdentifier))
+        return
+    end
 
+    -- Resolve the export directory ONCE (never per farm).
+    local directory = RmTransactionLogExporter.getExportDirectory()
     if not directory then
         Log:error("Auto-export failed: No export directory available")
         return
     end
 
-    -- Perform export
-    local success, message, filename = RmTransactionLogExporter.exportWithAutoFilename(
-        filteredTransactions, directory, suffix)
+    local periodSuffix = RmTransactionLog.generateAutoExportSuffix(exportType, periodIdentifier)
 
-    if success then
-        Log:info(string.format("Auto-exported %d transactions (%s) to: %s",
-            #filteredTransactions, exportType, filename))
-    else
-        Log:error(string.format("Auto-export (%s) failed: %s", exportType, message))
+    -- One CSV per farm. The `farm{n}` token is LOAD-BEARING: every per-farm file in this boundary shares
+    -- the same second-granularity getDate timestamp, so without it the second farm's write would clobber
+    -- the first. exportWithAutoFilename / generateFilename / exportToCSV are UNCHANGED (shared with the
+    -- manual + v1-migration exports).
+    local written = 0
+    for _, farmId in ipairs(farmIds) do
+        local farmRows = RmTransactionLog.filterTransactionsByFarm(periodRows, farmId)
+        local suffix = "farm" .. farmId .. "_" .. periodSuffix
+        -- pcall so a raise (e.g. resolveType on a malformed row) does not abort the whole boundary;
+        -- successOrErr holds the error string when ok is false, else the exporter's success boolean.
+        local ok, successOrErr, message, filename = pcall(
+            RmTransactionLogExporter.exportWithAutoFilename, farmRows, directory, suffix)
+        if not ok then
+            Log:error(string.format("Auto-export (%s) raised for farm %d: %s",
+                exportType, farmId, tostring(successOrErr)))
+        elseif successOrErr then
+            written = written + 1
+            Log:info(string.format("Auto-exported %d transactions for farm %d (%s) to: %s",
+                #farmRows, farmId, exportType, filename))
+        else
+            -- exporter returned false (bad directory, write error) -- log and continue to the next farm.
+            Log:error(string.format("Auto-export (%s) failed for farm %d: %s",
+                exportType, farmId, tostring(message)))
+        end
+    end
+
+    Log:info(string.format("Auto-export (%s) wrote %d/%d per-farm files", exportType, written, #farmIds))
+    if written == 0 then
+        -- Every farm failed -- a wiped boundary must not be silent.
+        Log:warning(string.format("Auto-export (%s) wrote NO files despite %d farm(s) with data",
+            exportType, #farmIds))
     end
 end
 
