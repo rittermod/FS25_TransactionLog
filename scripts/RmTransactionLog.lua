@@ -40,6 +40,11 @@ source(RmTransactionLog.dir .. "scripts/RmTransactionBatcher.lua")
 source(RmTransactionLog.dir .. "scripts/RmTransactionLogSettings.lua")
 source(RmTransactionLog.dir .. "scripts/RmTransactionLogExporter.lua")
 source(RmTransactionLog.dir .. "scripts/RmTransactionMigration.lua")
+-- MP event layer (2.0; under construction). Sourced under the still-off multiplayer flag so
+-- both files are present on server AND client when the flag flips at TL-12
+-- (mp-event-not-sourced-on-client). Sync codec FIRST so the event can delegate to it.
+source(RmTransactionLog.dir .. "scripts/RmTransactionLogSync.lua")
+source(RmTransactionLog.dir .. "scripts/events/RmAddTransactionEvent.lua")
 
 local Log = RmLogging.getLogger("TransactionLog")
 Log:setLevel("DEBUG") -- Uncomment to enable debug logging
