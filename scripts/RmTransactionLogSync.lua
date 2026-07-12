@@ -91,4 +91,45 @@ function RmTransactionLogSync.sendToFarm(farmId, event)
     g_currentMission:broadcastEventToFarm(event, farmId)
 end
 
--- TL-11: join / farm-switch snapshot builder + PLAYER_FARM_CHANGED handler live here.
+--- Build a per-farm snapshot: the master list (RmTransactionLog.transactions) filtered to ONE
+--- farm, in master (ascending-id) insertion order. PURE -- reads only the module master + arg,
+--- mutates nothing (returns a fresh list holding the SAME row tables). Bounded guard FIRST, mirror
+--- of the TL-10 capture bound (@see RmTransactionLog.changeFarmBalance): a nil / <=0 /
+--- >MAX_NUM_FARMS farmId returns {} cleanly -- so spectator 0, INVALID_FARM_ID 15 (the quit path),
+--- GUIDED_TOUR 14, and nil each yield an EMPTY snapshot with no `nil <= 0` raise. Orphan rows the
+--- loader kept with a nil/invalid farmId (@see RmTransactionLog.loadFromXMLFile) match no real farm
+--- and are intentionally excluded from every client snapshot -- they remain in the host master.
+--- Ground truth: @see FarmManager.MAX_NUM_FARMS / FarmManager.SPECTATOR_FARM_ID.
+---@param farmId number the owning farm id
+---@return table rows that farm's records in id order (a fresh list; {} when none / out-of-range)
+function RmTransactionLogSync.buildFarmSnapshot(farmId)
+    if farmId == nil or farmId <= 0 or farmId > FarmManager.MAX_NUM_FARMS then
+        return {}
+    end
+    local rows = {}
+    for _, row in ipairs(RmTransactionLog.transactions) do
+        if row.farmId == farmId then
+            rows[#rows + 1] = row
+        end
+    end
+    return rows
+end
+
+--- Send ONE connection a snapshot of one farm's history. Guards FIRST -- authority (g_server),
+--- live mission, a non-nil connection, and a NON-loopback connection -- so a rejected connection
+--- does NO wasted build; only then build + send. `connection:sendEvent` to one resolved connection
+--- is the base-game single-target idiom (@see FinanceStatsEvent, sent per-connection inside
+--- FSBaseMission.sendInitialClientState), NOT the per-farm broadcastEventToFarm (which cannot
+--- target a single joiner/switcher). The getIsLocal skip earns its keep on the SWITCH path (the
+--- host's own player resolves to the loopback, whose isServer == false -- so getIsLocal, not
+--- getIsServer, is the correct skip); on JOIN it is belt-and-suspenders (the join-finished path
+--- only ever delivers a remote, non-local connection). The RmTransactionSnapshotEvent:run authority
+--- guard is the load-bearing backstop regardless. buildFarmSnapshot clamps an out-of-range farmId
+--- to {}, so a switch-to-spectator (farmId 0) sends an EMPTY snapshot that clears the client store.
+---@param connection table the target client connection (already resolved by the caller)
+---@param farmId number the farm whose history to snapshot (0 / out-of-range -> an EMPTY snapshot)
+function RmTransactionLogSync.sendSnapshotToConnection(connection, farmId)
+    if g_server == nil or g_currentMission == nil then return end
+    if connection == nil or connection:getIsLocal() then return end
+    connection:sendEvent(RmTransactionSnapshotEvent.new(RmTransactionLogSync.buildFarmSnapshot(farmId)))
+end

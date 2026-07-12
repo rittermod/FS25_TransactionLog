@@ -45,6 +45,7 @@ source(RmTransactionLog.dir .. "scripts/RmTransactionMigration.lua")
 -- (mp-event-not-sourced-on-client). Sync codec FIRST so the event can delegate to it.
 source(RmTransactionLog.dir .. "scripts/RmTransactionLogSync.lua")
 source(RmTransactionLog.dir .. "scripts/events/RmAddTransactionEvent.lua")
+source(RmTransactionLog.dir .. "scripts/events/RmTransactionSnapshotEvent.lua")
 
 local Log = RmLogging.getLogger("TransactionLog")
 Log:setLevel("DEBUG") -- Uncomment to enable debug logging
@@ -478,6 +479,45 @@ function RmTransactionLog.changeFarmBalance(self, amount, moneyType, ...)
     end
 end
 
+---Join delivery (TL-11): on a client finishing its initial sync, send it a snapshot of ONLY its
+---own farm's history. Appended to FSBaseMission.sendInitialClientState (server-side; the base game
+---resolves `farm` via getFarmForUniqueUserId and passes it in). Skips spectator farm 0, mirroring
+---how the base game skips its per-farm finance-stat send for the spectator farm (@see
+---FSBaseMission.sendInitialClientState): a joining spectator's client store was already reset to {}
+---by loadFromXMLFile before the client's g_server bail, so there is nothing to clear. The rest
+---(mission present, nil / loopback connection) is guarded in sendSnapshotToConnection.
+---@param self table the FSBaseMission instance (appended-hook receiver; unused)
+---@param connection table the joining client's connection
+---@param user table the joining user (base game resolved `farm` from it; unused here)
+---@param farm table|nil the user's farm (nil / farmId 0 -> spectator, no snapshot)
+function RmTransactionLog.onSendInitialClientState(self, connection, user, farm)
+    if g_server == nil then return end
+    if farm == nil or farm.farmId == 0 then return end
+    RmTransactionLogSync.sendSnapshotToConnection(connection, farm.farmId)
+end
+
+---Farm-switch resync (TL-11): on PLAYER_FARM_CHANGED, re-send the switcher's connection a snapshot
+---of the NEW farm's history so its client REPLACEs (dropping the old farm's rows). Subscribed on the
+---server in loadMap. The message fires on BOTH sides, so guard g_server first. Unlike the join hook
+---this does NOT gate farm 0 -- a switch to spectator sends an EMPTY snapshot to CLEAR the old
+---farm's rows the store still holds. Defensive lifecycle guards: g_currentMission + userManager (no
+---raise during teardown) and player + player.userId. On the SERVER this message is published by
+---PlayerSetFarmEvent with a valid Player (userId set, new farmId set BEFORE the publish), so the nil
+---guards are cheap defense, not a dropped switch; the nil-player publish is CLIENT-side, ignored by
+---the g_server guard. Resolves the connection player.userId -> user -> getConnection();
+---sendSnapshotToConnection skips a nil connection / the host loopback.
+---Ground truth: @see UserManager.getUserByUserId, @see User.getConnection, @see PlayerSetFarmEvent.
+---@param self table RmTransactionLog (message-center target)
+---@param player table the Player that switched farms (player.farmId is the NEW farm)
+function RmTransactionLog.onPlayerFarmChanged(self, player)
+    if g_server == nil then return end
+    if g_currentMission == nil or g_currentMission.userManager == nil then return end
+    if player == nil or player.userId == nil then return end
+    local user = g_currentMission.userManager:getUserByUserId(player.userId)
+    local connection = user and user:getConnection()
+    RmTransactionLogSync.sendSnapshotToConnection(connection, player.farmId)
+end
+
 ---Saves all transactions to XML file in savegame directory
 function RmTransactionLog.saveToXmlFile(self)
     -- Server-authority guard: only the authority owns the savegame; a client no-ops.
@@ -676,6 +716,12 @@ function RmTransactionLog.loadMap(self)
     -- Subscribe to day change events for auto-export functionality
     g_messageCenter:subscribe(MessageType.DAY_CHANGED, RmTransactionLog.onDayChanged, RmTransactionLog)
 
+    -- Farm-switch resync (TL-11): re-send a client its NEW farm's snapshot when it switches farms.
+    -- The message fires on both server and client; onPlayerFarmChanged guards g_server. Subscribed
+    -- here (inside loadMap) because message-center subscriptions are cleared per mission, so they
+    -- must re-subscribe each load -- the same reason DAY_CHANGED lives here, not at file scope.
+    g_messageCenter:subscribe(MessageType.PLAYER_FARM_CHANGED, RmTransactionLog.onPlayerFarmChanged, RmTransactionLog)
+
     -- Append the mod's save function to the existing savegame function
     FSBaseMission.saveSavegame = Utils.appendedFunction(FSBaseMission.saveSavegame, RmTransactionLog.saveToXmlFile)
     -- Load existing transactions from XML file
@@ -747,6 +793,14 @@ PlayerInputComponent.registerGlobalPlayerActionEvents = Utils.appendedFunction(
     PlayerInputComponent.registerGlobalPlayerActionEvents, RmTransactionLog.addPlayerActionEvents)
 
 Farm.changeBalance = Utils.appendedFunction(Farm.changeBalance, RmTransactionLog.changeFarmBalance)
+
+-- Join delivery (TL-11): append the snapshot send onto FSBaseMission.sendInitialClientState at FILE
+-- scope (NOT in loadMap). A class-method hook must be appended ONCE per process; loadMap re-runs per
+-- mission load, so appending there would stack a second copy on every reload. (The saveSavegame
+-- append inside loadMap above is a latent duplicate-append across reloads by this same reasoning --
+-- pre-existing and out of scope here; do NOT copy that placement for this new append.)
+FSBaseMission.sendInitialClientState = Utils.appendedFunction(
+    FSBaseMission.sendInitialClientState, RmTransactionLog.onSendInitialClientState)
 
 -- Settings menu integration
 local inGameMenu = g_gui.screenControllers[InGameMenu]
