@@ -55,6 +55,7 @@ source(RmTransactionLog.dir .. "scripts/events/RmAddTransactionEvent.lua")
 source(RmTransactionLog.dir .. "scripts/events/RmTransactionSnapshotEvent.lua")
 source(RmTransactionLog.dir .. "scripts/events/RmEditCommentEvent.lua")
 source(RmTransactionLog.dir .. "scripts/events/RmSettingsChangeEvent.lua")
+source(RmTransactionLog.dir .. "scripts/events/RmClearLogEvent.lua")
 
 local Log = RmLogging.getLogger("TransactionLog")
 Log:setLevel("DEBUG") -- Uncomment to enable debug logging
@@ -350,6 +351,21 @@ function RmTransactionLog.isLocalPlayerFarmManager()
     return g_currentMission:getHasPlayerPermission("farmManager")
 end
 
+---Whether the LOCAL player is an admin (master user) - the Clear Log button gate (TL-15). This is the
+---exact `isAdmin` idiom the settings frame already uses inline (getIsServer() or isMasterUser), extracted
+---to one seam the GUI + tests share. On SP + listen-host getIsServer() is true, so the host is always an
+---admin (no SP regression); a pure client's non-admins gate out. Returns a STRICT boolean (`== true`
+---normalizes a nil isMasterUser, which setVisible needs). Nil-safe for teardown / headless (no mission ->
+---not an admin). Deliberately asymmetric with isLocalPlayerFarmManager: a whole-log clear is a master-user
+---(admin) action across ALL farms, not a per-farm manager action (decision 1).
+---@return boolean isAdmin
+function RmTransactionLog.isLocalPlayerAdmin()
+    if g_currentMission == nil then
+        return false
+    end
+    return g_currentMission:getIsServer() or g_currentMission.isMasterUser == true
+end
+
 ---Repaint the transaction-log frame when it is open, so an applied comment shows without a reopen.
 ---Best-effort and headless-safe: a no-op before the frame instance exists or when the log is closed.
 ---Gated on the frame's own `isLogOpen` flag (set in onOpen / cleared in onClose), NOT on
@@ -560,6 +576,102 @@ function RmTransactionLog.refreshSettingsControls()
         local control = RmTransactionLog.CONTROLS[id]
         if control ~= nil then
             control:setState(settings:getStateIndex(id))
+        end
+    end
+end
+
+-- ============================================================
+-- Clear-log transport (TL-15): server-authoritative, master-user-gated WHOLE-LOG clear. The GUI calls
+-- requestClearLog; the server is the boundary. Closes gaps G7/G11 (the TL-13 interim hazard where a
+-- worker retained a destructive, unsynced Clear Log). Whole-log scope (decision 1): a master user is
+-- trusted over ALL farms' data, so the fan-out is the GLOBAL g_server:broadcastEvent, NOT the farm-scoped
+-- broadcastEventToFarm the row layer uses.
+-- ============================================================
+
+---The alias-proof whole-log wipe, shared by the client-echo path (RmClearLogEvent:run under g_server ==
+---nil) AND applyClearAuthoritative. Clears the existing RmTransactionLog.transactions table IN PLACE
+---(by index, NOT `= {}`), keeping table identity - mirrors RmTransactionSnapshotEvent:run's clear half
+---for pattern consistency; the real correctness requirement is that derived views repaint (refreshOpenLog),
+---since the open frame holds a filtered COPY. Deliberately does NOT reset nextTransactionId: ids stay
+---monotonic across a clear so a late batch flush can never reuse one (see nextTransactionId's contract).
+---Nil-safe for teardown / headless.
+function RmTransactionLog.clearTransactionsInPlace()
+    local transactions = RmTransactionLog.transactions
+    if transactions == nil then return end
+    for i = #transactions, 1, -1 do
+        transactions[i] = nil
+    end
+end
+
+---Server apply + global fan-out (authority-only; only ever entered under g_server ~= nil, which both
+---callers - the requestClearLog authority branch AND handleClearRequest after its master gate -
+---guarantee). Order is load-bearing: flushAllBatches FIRST (drain in-flight batches so a pending flush
+---cannot repopulate the log seconds after a "successful" clear - the SAME pre-persist idiom already run
+---before every save, saveToXmlFile), THEN the in-place wipe + refreshOpenLog (repaint the host's own open
+---frame, headless-safe no-op on a dedi) + g_server:broadcastEvent (the genuinely GLOBAL broadcast, since a
+---whole-log clear crosses every farm - NOT broadcastEventToFarm). No no-op short-circuit for an
+---already-empty log: a clear is rare + deliberate, and an idempotent empty-clear broadcast is harmless
+---(unlike TL-14's settings, where a redundant click would spuriously rewrite XML + spam clients).
+---broadcastEvent defaults sendLocal=false, so the host mutates local state FIRST (the wipe) then
+---broadcasts; the loopback is skipped, so the host never re-applies via RmClearLogEvent:run's client branch.
+---INTERNAL (server-only invariant); the only sanctioned callers are the two seams named above.
+function RmTransactionLog.applyClearAuthoritative()
+    RmTransactionBatcher.flushAllBatches(RmTransactionLog.logTransaction)
+    RmTransactionLog.clearTransactionsInPlace()
+    RmTransactionLog.refreshOpenLog()
+    g_server:broadcastEvent(RmClearLogEvent.new())
+end
+
+---Server-side request handler - the SINGLE security boundary for REMOTE clears. Only reachable
+---server-side (the g_server ~= nil branch of RmClearLogEvent:run). Guard order mirrors the shipped
+---siblings handleSettingChangeRequest / onPlayerFarmChanged and is load-bearing: g_server FIRST
+---(getIsUserIdMasterUser asserts server-only, so this guard keeps it in-context); then g_currentMission /
+---userManager non-nil (survive teardown - a late network event during shutdown is exactly where an
+---unguarded boundary nil-crashes); then resolve the user and reject a nil user (unknown / torn-down
+---connection) BEFORE user:getId(); then reject a nil userId; then reject (DEBUG + return) unless the sender
+---is a MASTER USER via userManager:getIsUserIdMasterUser(userId). NEVER the broken getIsConnectionMasterUser
+---stub (unconditional false) and NEVER Farm:isUserFarmManager. A whole-log clear is not farm-scoped, so
+---there is no getHasPlayerPermission master short-circuit to lean on the way TL-13's edit does - hence the
+---direct userId check. The local authority path (requestClearLog under g_server ~= nil) is the trusted host
+---and skips this gate by design.
+---@param connection table the requesting client's connection
+function RmTransactionLog.handleClearRequest(connection)
+    if g_server == nil then return end
+    local mission = g_currentMission
+    if mission == nil or mission.userManager == nil then return end
+    local user = mission.userManager:getUserByConnection(connection)
+    if user == nil then
+        Log:debug("handleClearRequest: no user for connection; dropping clear")
+        return
+    end
+    local userId = user:getId()
+    if userId == nil then
+        Log:debug("handleClearRequest: user has no id; dropping clear")
+        return
+    end
+    if not mission.userManager:getIsUserIdMasterUser(userId) then
+        Log:debug("handleClearRequest: user %s is not a master user; dropping clear", tostring(userId))
+        return
+    end
+    RmTransactionLog.applyClearAuthoritative()
+end
+
+---UI-entry router for a clear - the ONE seam RmTransactionLogFrame.onYesNoClearLog calls. Splits by
+---authority:
+---  * Authority (SP / listen-host, g_server ~= nil): the local player already passed the button gate, so
+---    apply + broadcast directly via applyClearAuthoritative.
+---  * Pure client: send an RmClearLogEvent REQUEST to the server (the security boundary), guarding BOTH
+---    g_client and the server connection for teardown. NO optimistic local wipe (differs from TL-13's
+---    requestCommentEdit): a whole-log clear is DESTRUCTIVE, so a remote admin waits for the server's
+---    echoed broadcast rather than pre-wiping with no rollback path if the server rejects (e.g. a demoted
+---    admin's stale button).
+function RmTransactionLog.requestClearLog()
+    if g_server ~= nil then
+        RmTransactionLog.applyClearAuthoritative()
+    else
+        local serverConnection = g_client and g_client:getServerConnection()
+        if serverConnection ~= nil then
+            serverConnection:sendEvent(RmClearLogEvent.new())
         end
     end
 end

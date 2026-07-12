@@ -150,6 +150,17 @@ function RmTransactionLogFrame:onOpen()
         self.buttonExportCSV:setVisible(isManager)
     end
 
+    -- Admin-gate the destructive Clear Log (TL-15): show it only to an admin (master user), hide it for a
+    -- worker / member / spectator. This CLOSES the TL-13 interim hazard (a non-manager kept a destructive
+    -- Clear Log). Deliberately a separate gate from the manager one above: clearing is a whole-log
+    -- (all-farms) master-user action, not a per-farm manager action. On SP + the listen-host getIsServer()
+    -- is true, so it stays visible (no SP regression). Nil-guarded like the sibling buttons; the button gate
+    -- is UX - the server master-user check is the security boundary.
+    local isAdmin = RmTransactionLog.isLocalPlayerAdmin()
+    if self.buttonClearLog ~= nil then
+        self.buttonClearLog:setVisible(isAdmin)
+    end
+
     self:refreshData()
 
     -- Set focus to the table
@@ -285,10 +296,18 @@ end
 function RmTransactionLogFrame:onClickClearLog()
     Log:trace("RmTransactionLogFrame:onClickClearLog()")
 
+    -- Re-check the admin gate at entry (TL-15): the button is hidden for a non-admin, but a keybind or
+    -- focus path could still reach the handler, so bail defensively before the confirm dialog. Mirrors
+    -- onClickAddComment / onClickExportCSV. The server re-validates the actual clear; this is client-side
+    -- defense-in-depth.
+    if not RmTransactionLog.isLocalPlayerAdmin() then
+        Log:debug("onClickClearLog: local player is not an admin; ignoring")
+        return
+    end
+
     -- Count the MASTER, not the farm-filtered display: onYesNoClearLog wipes the whole master (all
     -- farms), so a listen-host must be told the true scope it is about to erase, never the smaller
-    -- own-farm count. Clear stays a whole-log action here; the per-farm, admin-gated networked clear
-    -- is a later task.
+    -- own-farm count.
     local masterCount = RmTransactionLog.transactions and #RmTransactionLog.transactions or 0
     local confirmationText = string.format(g_i18n:getText("ui_transaction_log_clear_confirmation"), masterCount)
 
@@ -299,18 +318,17 @@ function RmTransactionLogFrame:onClickClearLog()
 end
 
 function RmTransactionLogFrame:onYesNoClearLog(yes)
-    if yes then
-        -- Clear the transaction log
-        if RmTransactionLog then
-            RmTransactionLog.transactions = {}
-            self.transactions = {}
-
-            -- Update display
-            self.totalTransactionsValue:setText("0")
-            self.transactionTable:reloadData()
-
-            Log:info("Transaction log cleared via GUI")
-        end
+    if yes and RmTransactionLog then
+        -- Route the clear through the single server-authoritative request path (TL-15): on the authority
+        -- (SP / listen-host) it wipes the master + broadcasts globally; on a pure client it sends the
+        -- request and waits for the server's echoed broadcast (NO optimistic local wipe - a destructive
+        -- clear waits for confirmation). refreshData rebuilds the display list from the master, updates the
+        -- total, and reloads the table: on the authority path the master is already wiped so the frame
+        -- repaints to zero at once; on a pure client it repaints the still-full list until the server echo's
+        -- refreshOpenLog repaints it (near-instant on a reliable, ordered channel).
+        RmTransactionLog.requestClearLog()
+        self:refreshData()
+        Log:info("Transaction log clear requested via GUI")
     end
 end
 
