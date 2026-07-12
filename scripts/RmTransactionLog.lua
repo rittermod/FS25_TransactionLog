@@ -616,7 +616,9 @@ end
 ---broadcasts; the loopback is skipped, so the host never re-applies via RmClearLogEvent:run's client branch.
 ---INTERNAL (server-only invariant); the only sanctioned callers are the two seams named above.
 function RmTransactionLog.applyClearAuthoritative()
-    RmTransactionBatcher.flushAllBatches(RmTransactionLog.logTransaction)
+    RmTransactionBatcher.flushAllBatches(RmTransactionLog.logTransaction, "clear")
+    local count = RmTransactionLog.transactions ~= nil and #RmTransactionLog.transactions or 0
+    Log:info(string.format("Clearing transaction log: wiping %d transaction(s) across all farms", count))
     RmTransactionLog.clearTransactionsInPlace()
     RmTransactionLog.refreshOpenLog()
     g_server:broadcastEvent(RmClearLogEvent.new())
@@ -653,6 +655,7 @@ function RmTransactionLog.handleClearRequest(connection)
         Log:debug("handleClearRequest: user %s is not a master user; dropping clear", tostring(userId))
         return
     end
+    Log:info(string.format("handleClearRequest: master user %s cleared the transaction log", tostring(userId)))
     RmTransactionLog.applyClearAuthoritative()
 end
 
@@ -879,7 +882,7 @@ function RmTransactionLog.performAutoExport(exportType, periodIdentifier)
     Log:info(string.format("Performing auto-export: %s for period %s", exportType, periodIdentifier))
 
     -- Flush all pending batches before exporting to ensure we capture all transactions
-    RmTransactionBatcher.flushAllBatches(RmTransactionLog.logTransaction)
+    RmTransactionBatcher.flushAllBatches(RmTransactionLog.logTransaction, "auto-export")
 
     -- Filter transactions from the specified period only (once, for all farms)
     local allTransactions = RmTransactionLog.transactions or {}
@@ -1055,7 +1058,7 @@ function RmTransactionLog.saveToXmlFile(self)
     Log:info("Saving transaction log to XML file...")
 
     -- Flush all pending batches before saving
-    RmTransactionBatcher.flushAllBatches(RmTransactionLog.logTransaction)
+    RmTransactionBatcher.flushAllBatches(RmTransactionLog.logTransaction, "save")
 
     -- Always write the versioned root, even at 0 rows: the file then exists as a v2
     -- stub so a fresh v2 session never re-triggers migration on the next load.

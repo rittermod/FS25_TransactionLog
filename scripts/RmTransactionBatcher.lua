@@ -196,7 +196,9 @@ end
 
 ---Flushes all active batches immediately
 ---@param logFunction function function to call when batches are flushed
-function RmTransactionBatcher.flushAllBatches(logFunction)
+---@param context string|nil short label for WHY the drain runs ("save" / "auto-export" / "clear"); drives
+---  the log line only, since flushAllBatches drains before all three call sites. Defaults to "flush".
+function RmTransactionBatcher.flushAllBatches(logFunction, context)
     local batchesToFlush = {}
 
     -- Collect all active batch keys
@@ -204,7 +206,7 @@ function RmTransactionBatcher.flushAllBatches(logFunction)
         table.insert(batchesToFlush, batchKey)
     end
 
-    Log:debug(string.format("Flushing all %d active batches before save", #batchesToFlush))
+    Log:debug(string.format("Flushing all %d active batches before %s", #batchesToFlush, context or "flush"))
 
     -- Flush all batches
     for _, batchKey in ipairs(batchesToFlush) do

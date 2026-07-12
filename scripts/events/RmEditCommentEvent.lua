@@ -143,6 +143,8 @@ function RmEditCommentEvent:run(connection)
     -- 4. Validated: apply the clamped comment to the master and re-broadcast the clamped value.
     local clamped = RmTransactionLog.clampComment(self.comment)
     if RmTransactionLog.applyCommentById(self.id, clamped) then
+        Log:debug("RmEditCommentEvent: farm %s row id %s comment updated by user %s; re-broadcasting",
+            tostring(row.farmId), tostring(self.id), tostring(user:getId()))
         RmTransactionLog.refreshOpenLog()
         RmTransactionLogSync.sendToFarm(row.farmId, RmEditCommentEvent.new(self.id, clamped))
     end
