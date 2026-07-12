@@ -1,8 +1,8 @@
 -- RmAddTransactionEvent.lua
 -- Purpose: First concrete network event of the TransactionLog 2.0 MP layer. Carries ONE
---          transaction row (server -> client) and, in TL-10/TL-11, applies it to the client's
---          master list. TL-9 ships the 5-method Event shell + serialization ONLY; run() is a
---          documented stub because the event is not fired anywhere yet.
+--          transaction row (server -> client) and applies it to the client's master list.
+--          TL-9 shipped the 5-method Event shell + serialization; TL-10 wired it up -- the server
+--          fires it from logTransaction and run() appends the received row on the client.
 -- Author: Ritter
 -- Pattern: a standard object-less money event -- registered with InitEventClass, amount as Float32,
 --          farmId as UIntN, and readStream ending in self:run. Serialization delegates to the shared
@@ -50,12 +50,17 @@ function RmAddTransactionEvent:readStream(streamId, connection)
     self:run(connection)
 end
 
---- STUB for TL-9. The event is not fired anywhere yet (capture wiring is TL-10), so run() is an
---- intentional no-op. The client-apply body -- append to the master list under an id-collision
---- policy, then refresh an open GUI -- plus targeted server->farm delivery (sendToFarm) land in
---- TL-10/TL-11, where the master list and the live-plus-snapshot duplicate-id race actually
---- exist. Shipping a stub means nothing untested ships.
+--- Client-side apply (TL-10): append the received row to the local master list -- the same
+--- module-level RmTransactionLog.transactions the GUI/exporter read. Guarded to a non-authority
+--- (g_server ~= nil returns early) as defense-in-depth: the host already holds the row in its
+--- master list, so it must never re-append its own broadcast. A PLAIN append -- NO id-dedup and
+--- NO live-GUI refresh: with no snapshot yet, a client's store is filled purely by ordered live
+--- adds, so append is correct and complete for the live path. The live/snapshot duplicate-id
+--- race is TL-11; the open-dialog live refresh is TL-11/TL-12 (an incoming row shows on dialog
+--- reopen). On a client that table is never reassigned (load/migration are server-guarded), so
+--- the append cannot orphan.
 ---@param connection table
 function RmAddTransactionEvent:run(connection)
-    -- Intentionally empty until TL-10/TL-11 (see above).
+    if g_server ~= nil then return end
+    table.insert(RmTransactionLog.transactions, self.row)
 end

@@ -190,6 +190,14 @@ function RmTransactionLog.logTransaction(amount, farmId, title, statistic, custo
         Log:warning("logTransaction called with nil farmId")
         return
     end
+    -- Defense-in-depth at the true insertion+sync boundary: never insert a bad-farm row into the
+    -- master list nor fire the sync trigger for it. changeFarmBalance rejects these first, so this
+    -- guards any other caller. ORDER MATTERS: the `farmId == nil` check above MUST stay before this
+    -- one -- `nil <= 0` raises in Lua 5.1, so reordering would crash on a nil-farm transaction.
+    if farmId <= 0 then
+        Log:warning("logTransaction called with non-positive farmId: %s", tostring(farmId))
+        return
+    end
 
     -- Round to two decimals and get absolute value
     local amount_check = math.abs(math.floor(amount * 100 + 0.5) / 100)
@@ -243,6 +251,16 @@ function RmTransactionLog.logTransaction(amount, farmId, title, statistic, custo
         transaction.amount, tostring(transaction.title), tostring(transaction.statistic),
         tostring(transaction.constant), transaction.currentFarmBalance))
     Log:trace("Transaction table size: %d", #RmTransactionLog.transactions)
+
+    -- Single sync trigger (TL-10): once the row is in the master list, deliver it to ONLY the
+    -- owning farm's remote clients. This is the ONE place sync fires -- it covers direct inserts
+    -- AND batched-at-flush rows alike, since flushBatch routes every collapsed row back through
+    -- logTransaction (one send per final row, so batching still reduces event volume). sendToFarm
+    -- guards internally, so this is a clean no-op on a client, on a bad farmId, or on a nil
+    -- mission. In singleplayer this DOES run (the host is the authority) but delivers nothing --
+    -- the client list is empty and the native send skips the host loopback -- so SP is behaviorally
+    -- unchanged; real cross-client delivery begins only when the MP flag flips at TL-12.
+    RmTransactionLogSync.sendToFarm(transaction.farmId, RmAddTransactionEvent.new(transaction))
 end
 
 ---Shows the transaction log GUI dialog
@@ -422,10 +440,16 @@ function RmTransactionLog.changeFarmBalance(self, amount, moneyType, ...)
         return
     end
 
-    if self.farmId ~= g_currentMission:getFarmId() then
+    -- Server captures ALL real farms into the master list -- NO getFarmId() filter: that call
+    -- returns nil/0 on a dedicated server with no local player and IS gap G2 (nothing captured).
+    -- Instead a nil-safe, bounded sanity guard rejects the reserved spectator / guided-tour /
+    -- invalid farm ids (FarmManager's reserved constants -- they are positive, so a bare `> 0`
+    -- would wrongly admit them), a nil id (mid-construction/deletion), and anything past
+    -- FarmManager.MAX_NUM_FARMS. `nil` is checked first because `nil <= 0` would raise. In pure SP
+    -- only farm 1 exists, so capture is behaviorally identical to before.
+    if self.farmId == nil or self.farmId <= 0 or self.farmId > FarmManager.MAX_NUM_FARMS then
         Log:debug(string.format(
-            "changeFarmBalance called with farmId: %s, but current farmId is: %s",
-            tostring(self.farmId), tostring(g_currentMission:getFarmId())))
+            "changeFarmBalance rejected out-of-range farmId: %s", tostring(self.farmId)))
         return
     end
 

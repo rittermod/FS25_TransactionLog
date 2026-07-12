@@ -69,4 +69,26 @@ function RmTransactionLogSync.readRow(streamId)
     return row
 end
 
--- TL-10/TL-11: sendToFarm targeting, snapshot builder, farm-change handler live here.
+--- Deliver an event to ONLY the given farm's remote clients (TL-10 targeted delivery). Guards,
+--- then delegates to the base-game native g_currentMission:broadcastEventToFarm(event, farmId):
+--- it builds the farm's connection list and calls broadcastEvent with sendLocal defaulting FALSE,
+--- so the host loopback (NetworkNode.LOCAL_STREAM_ID) is skipped and the host never double-applies
+--- its own already-captured row. A hand-rolled `not connection:getIsServer()` loop would WRONGLY
+--- include the host loopback (its isServer == false) and double-apply -- so we delegate to the
+--- native primitive instead; farm isolation + host-skip are the engine's contract (verified
+--- in-game, not by unit test). No-op on a non-authority (g_server nil), a missing mission
+--- (teardown), or a non-positive farmId. In singleplayer it still RUNS (the host is the
+--- authority) but broadcastEventToFarm finds an empty client list, so it delivers nothing -- a
+--- behavioral no-op, no SP-visible effect.
+--- Ground truth: @see FSBaseMission.broadcastEventToFarm (builds the per-farm connection list,
+--- calls Server.broadcastEvent with sendLocal omitted -> false) and @see Server.broadcastEvent
+--- (its send loop skips the NetworkNode.LOCAL_STREAM_ID loopback when sendLocal is false).
+---@param farmId number the owning farm id (already validated at the logTransaction boundary)
+---@param event table an RmAddTransactionEvent carrying the row to deliver
+function RmTransactionLogSync.sendToFarm(farmId, event)
+    if g_server == nil or g_currentMission == nil then return end
+    if farmId == nil or farmId <= 0 then return end
+    g_currentMission:broadcastEventToFarm(event, farmId)
+end
+
+-- TL-11: join / farm-switch snapshot builder + PLAYER_FARM_CHANGED handler live here.
