@@ -363,6 +363,36 @@ function RmTransactionLog.filterTransactionsByPeriod(transactions, periodPattern
     return filteredTransactions
 end
 
+---Filters transactions to a single farm. PURE: no module state, returns a NEW array holding the
+---SAME row references (identity preserved so a comment edit still resolves the master row by id),
+---in the caller's (master, ascending-id) order.
+---
+---The guard is load-bearing on two counts. (1) The nil guard stops a nil farmId from matching a
+---loader-preserved orphan row whose farmId is also nil (nil == nil would otherwise leak that orphan
+---into a "no farm" caller's view/export). (2) The `farmId <= 0` guard makes a spectator
+---(getFarmId() == 0, FarmManager.SPECTATOR_FARM_ID) resolve to an empty view/export
+---UNCONDITIONALLY - even against a corrupted/legacy row carrying farmId 0 - keeping this consistent
+---with TL-11's RmTransactionLogSync.buildFarmSnapshot(0) == {}. Real farm ids are >= 1. Orphan /
+---non-real-farm rows therefore match no real farm and are intentionally excluded from every
+---per-farm view/export - a quarantine, not a bug.
+---@param transactions table|nil array of transaction objects (master order)
+---@param farmId number|nil the farm to filter to (0 = spectator, nil = no local player)
+---@return table filtered a new array of the rows whose farmId == farmId (empty for nil args or a non-real farmId <= 0)
+function RmTransactionLog.filterTransactionsByFarm(transactions, farmId)
+    if transactions == nil or farmId == nil or farmId <= 0 then
+        return {}
+    end
+
+    local filtered = {}
+    for _, transaction in ipairs(transactions) do
+        if transaction.farmId == farmId then
+            filtered[#filtered + 1] = transaction
+        end
+    end
+
+    return filtered
+end
+
 ---Generates auto-export filename suffix based on type and period
 ---@param exportType string "daily", "monthly", or "yearly"
 ---@param periodIdentifier string date pattern (e.g., "2024-12-09", "2024-12", "2024")

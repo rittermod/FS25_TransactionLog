@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8" standalone="no" ?>
 <modDesc descVersion="110">
     <author>Ritter</author>
-    <version>2.0.0.0-dev.1</version>
+    <version>2.0.0.0-dev.2</version>
     <iconFilename>icon_TransactionLog.dds</iconFilename>
     <title>
         <en>Transaction log</en>
@@ -38,7 +38,7 @@ Changelog 1.1.0.0:
     <extraSourceFiles>
         <sourceFile filename="scripts/main.lua"/>
     </extraSourceFiles>
-    <multiplayer supported="false"/>
+    <multiplayer supported="true"/>
     <l10n filenamePrefix="languages/l10n" />
     <inputBinding>
         <actionBinding action="RM_SHOW_TRANSACTION_LOG">

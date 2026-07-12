@@ -29,6 +29,14 @@
                 </ListItem>
             </SmoothList>
 
+            <!-- Spectator hint: hidden by default, shown from onOpen only when the viewer is not in a
+                 farm (farm 0). Overlays the empty table region. The text is set at runtime by
+                 resolveSpectatorHint() (hasText-guarded with an English fallback) rather than a
+                 $l10n_ default here, so a missing key in a non-English locale never renders the
+                 engine's "Missing '...'" placeholder. Exact profile/position validated in the
+                 in-game manual pass. -->
+            <Text profile="dialogTitle" id="emptyHintText" position="0px -430px" size="1265px 40px" visible="false"/>
+
             <!-- Scrollbar -->
             <ThreePartBitmap profile="fs25_listSliderBox" position="-50px -40px" size="12px 645px" with="anchorTopRight">
                 <Slider profile="fs25_listSlider" size="6px 637px" dataElementId="transactionTable" id="tableSlider"/>

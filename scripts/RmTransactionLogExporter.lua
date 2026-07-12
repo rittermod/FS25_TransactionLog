@@ -7,6 +7,11 @@ RmTransactionLogExporter = {}
 local RmTransactionLogExporter_mt = Class(RmTransactionLogExporter)
 local Log = RmLogging.getLogger("TransactionLog")
 
+-- Message exportToCSV returns for an empty transaction set. Named so callers can distinguish an
+-- empty-result "nothing to export" from a genuine failure (bad directory, file write error) without
+-- matching a bare string. Must stay equal to exportToCSV's empty-set message.
+RmTransactionLogExporter.NO_DATA_MESSAGE = "No transactions to export"
+
 ---Creates a new RmTransactionLogExporter instance
 ---@return table the new exporter instance
 function RmTransactionLogExporter.new()
@@ -218,4 +223,34 @@ function RmTransactionLogExporter.exportCurrentTransactions(suffix, rawV1)
     local transactions = RmTransactionLog and RmTransactionLog.transactions or {}
 
     return RmTransactionLogExporter.exportWithAutoFilename(transactions, directory, suffix, rawV1)
+end
+
+---Exports ONLY the current farm's transactions (the manual GUI export), filtered through the shared
+---per-farm helper from the LIVE mission farm. This is deliberate defence-in-depth: it re-derives the
+---farm from g_currentMission:getFarmId() rather than the display, so the export stays farm-correct
+---even if the dialog is stale or closed. In SP getFarmId() is 1 and only farm 1 exists (a no-op
+---filter); a spectator (0) or dedicated server (nil) yields an empty set, which flows through
+---exportWithAutoFilename to the NO_DATA_MESSAGE result the caller maps to the "no data" dialog.
+---@param suffix string optional suffix for the filename
+---@return boolean success true if export succeeded
+---@return string message success/error message (NO_DATA_MESSAGE when the farm has no rows)
+---@return string|nil filename the generated filename (only if successful)
+---@return number exportedCount rows actually handed to the exporter (the live-farm set size)
+function RmTransactionLogExporter.exportCurrentFarmTransactions(suffix)
+    local directory = RmTransactionLogExporter.getExportDirectory()
+    if not directory then
+        local msg = "No export directory available"
+        return false, msg, nil, 0
+    end
+
+    local farmId = g_currentMission ~= nil and g_currentMission:getFarmId() or nil
+    local master = RmTransactionLog and RmTransactionLog.transactions or {}
+    local mine = RmTransactionLog.filterTransactionsByFarm(master, farmId)
+
+    -- Pass the (possibly empty) filtered set through the SAME auto-filename path as the whole-log
+    -- export, so the filename scheme is unchanged and an empty set returns NO_DATA_MESSAGE. Return
+    -- the filtered count as a 4th value so the caller can report an HONEST count (the rows actually
+    -- written from the live farm), not a possibly-stale display count.
+    local success, message, filename = RmTransactionLogExporter.exportWithAutoFilename(mine, directory, suffix, false)
+    return success, message, filename, #mine
 end

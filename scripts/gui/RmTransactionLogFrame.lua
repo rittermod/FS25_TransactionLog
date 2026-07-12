@@ -14,6 +14,17 @@ RmTransactionLogFrame.MAX_COMMENT_LENGTH = 200 -- Maximum characters allowed in 
 RmTransactionLogFrame.POSITIVE_COLOR = { 0, 0.8, 0, 1 }     -- Darker green for positive amounts
 RmTransactionLogFrame.NEGATIVE_COLOR = { 0.9, 0.2, 0.2, 1 } -- Darker red for negative amounts
 
+-- Spectator farm (a player not in any farm). The engine reports farmId 0 for such a player; a
+-- spectator has no farm log to show, so the frame shows a "join a farm" hint instead of an empty
+-- table.
+RmTransactionLogFrame.SPECTATOR_FARM_ID = 0
+
+-- English fallback for the spectator hint, used when the l10n key is absent in the active locale
+-- (getText would otherwise render the engine's "Missing '...'" placeholder). English-only is
+-- intentional debt; other locales backfill via the translation workflow.
+RmTransactionLogFrame.SPECTATOR_HINT_FALLBACK =
+    "You are not a member of a farm. Join a farm to see its transaction log."
+
 RmTransactionLogFrame.CONTROLS = {
     "transactionTable",
     "tableSlider",
@@ -21,7 +32,8 @@ RmTransactionLogFrame.CONTROLS = {
     "totalTransactionsValue",
     "buttonAddComment",
     "buttonClearLog",
-    "buttonExportCSV"
+    "buttonExportCSV",
+    "emptyHintText"
 }
 
 ---Creates a new RmTransactionLogFrame instance
@@ -47,30 +59,66 @@ function RmTransactionLogFrame:onCreate()
     RmTransactionLogFrame:superClass().onCreate(self)
 end
 
+---Builds the GUI display list for a farm: the farm-filtered rows newest-first, plus the spectator
+---flag. PURE (no self / no GUI framework), so the load-bearing logic - filter applied, sort order,
+---hint decision - is unit-tested on real code. onOpen is a thin apply over this.
+---@param transactions table|nil the master transaction list
+---@param farmId number|nil the viewing farm (0 = spectator, nil = no local player)
+---@return table rows farm-filtered rows sorted newest-first (ingameDateTime desc, id desc)
+---@return boolean isSpectator true when farmId is the spectator farm (0)
+function RmTransactionLogFrame.buildDisplayList(transactions, farmId)
+    -- Same-reference rows (an id-resolved comment edit still lands on the master); a fresh array so
+    -- sorting never scrambles the master's insertion (= ascending-id) order.
+    local rows = RmTransactionLog.filterTransactionsByFarm(transactions, farmId)
+
+    -- Newest first; deterministic within an equal minute by descending id.
+    table.sort(rows, function(a, b)
+        local ad, bd = a.ingameDateTime or "", b.ingameDateTime or ""
+        if ad ~= bd then
+            return ad > bd
+        end
+        return (a.id or 0) > (b.id or 0)
+    end)
+
+    return rows, farmId == RmTransactionLogFrame.SPECTATOR_FARM_ID
+end
+
+---Resolves the spectator-hint text, hasText-guarded so a missing key (non-English locale) renders
+---the hardcoded English fallback rather than the engine's "Missing '...'" placeholder.
+---@return string
+function RmTransactionLogFrame.resolveSpectatorHint()
+    local key = "ui_transaction_log_spectator_hint"
+    if g_i18n ~= nil and g_i18n:hasText(key) then
+        return g_i18n:getText(key)
+    end
+    return RmTransactionLogFrame.SPECTATOR_HINT_FALLBACK
+end
+
 function RmTransactionLogFrame:onOpen()
     Log:trace("RmTransactionLogFrame:onOpen()")
     RmTransactionLogFrame:superClass().onOpen(self)
 
-    -- Build the display list as a SHALLOW COPY of the master log: elements stay
-    -- references to the master records (so an id-resolved comment edit still lands),
-    -- but sorting the copy never scrambles the master's insertion order.
-    self.transactions = {}
-    if RmTransactionLog.transactions then
-        for i, transaction in ipairs(RmTransactionLog.transactions) do
-            self.transactions[i] = transaction
-        end
-        -- Newest first; deterministic within an equal minute by descending id.
-        table.sort(self.transactions, function(a, b)
-            local ad, bd = a.ingameDateTime or "", b.ingameDateTime or ""
-            if ad ~= bd then
-                return ad > bd
-            end
-            return (a.id or 0) > (b.id or 0)
-        end)
-    end
+    -- Farm-scope the view through the shared pure filter: defence-in-depth on a pure client (its
+    -- store is already scoped by the join/switch snapshot) and a real narrowing on a listen-host
+    -- whose master holds every farm. In SP getFarmId() is 1 and only farm 1 exists, so the filter
+    -- is a no-op.
+    local myFarmId = g_currentMission ~= nil and g_currentMission:getFarmId() or nil
+    local rows, isSpectator = RmTransactionLogFrame.buildDisplayList(RmTransactionLog.transactions, myFarmId)
+    self.transactions = rows
 
     -- Update total transactions display
     self.totalTransactionsValue:setText(tostring(#self.transactions))
+
+    -- Spectator hint: shown only when the viewer is not in a farm (farm 0). A farm member with zero
+    -- rows sees the normal empty table, no hint. Nil-guarded like RmCommentInputDialog's button
+    -- visibility; a nil binding means a fat-fingered control id/profile, so surface it once rather
+    -- than degrade silently to no-hint.
+    if self.emptyHintText ~= nil then
+        self.emptyHintText:setText(RmTransactionLogFrame.resolveSpectatorHint())
+        self.emptyHintText:setVisible(isSpectator)
+    elseif isSpectator then
+        Log:warning("emptyHintText control missing; spectator hint not shown")
+    end
 
     -- Reload the table data
     self.transactionTable:reloadData()
@@ -209,8 +257,12 @@ end
 function RmTransactionLogFrame:onClickClearLog()
     Log:trace("RmTransactionLogFrame:onClickClearLog()")
 
-    -- Show confirmation dialog
-    local confirmationText = string.format(g_i18n:getText("ui_transaction_log_clear_confirmation"), #self.transactions)
+    -- Count the MASTER, not the farm-filtered display: onYesNoClearLog wipes the whole master (all
+    -- farms), so a listen-host must be told the true scope it is about to erase, never the smaller
+    -- own-farm count. Clear stays a whole-log action here; the per-farm, admin-gated networked clear
+    -- is a later task.
+    local masterCount = RmTransactionLog.transactions and #RmTransactionLog.transactions or 0
+    local confirmationText = string.format(g_i18n:getText("ui_transaction_log_clear_confirmation"), masterCount)
 
     YesNoDialog.show(self.onYesNoClearLog, self, confirmationText,
         g_i18n:getText("ui_transaction_log_clear_title"),
@@ -238,13 +290,12 @@ end
 function RmTransactionLogFrame:onClickExportCSV()
     Log:trace("RmTransactionLogFrame:onClickExportCSV()")
 
-    if #self.transactions == 0 then
-        InfoDialog.show(g_i18n:getText("ui_transaction_log_export_no_data"))
-        return
-    end
-
-    -- Use the exporter module to handle the export
-    local success, message, filename = RmTransactionLogExporter.exportCurrentTransactions("manual")
+    -- Export only THIS client's farm, re-derived from the LIVE farm inside the exporter (so a stale
+    -- display after a farm switch cannot leak or misreport). Branch on the exporter's own empty
+    -- result, not the display count: the old #self.transactions pre-guard was stale (a
+    -- switch-to-spectator with the dialog open leaves the display non-empty while the live-farm
+    -- export is empty), which would wrongly show the generic error instead of "no data".
+    local success, message, filename, exportedCount = RmTransactionLogExporter.exportCurrentFarmTransactions("manual")
 
     if success then
         -- Extract just the filename from the success message for display
@@ -261,11 +312,18 @@ function RmTransactionLogFrame:onClickExportCSV()
             displayPath = string.sub(displayPath, savegamePathIndex)
         end
 
+        -- Report the count actually exported from the LIVE farm (the exporter's 4th return), not the
+        -- display count, which can be stale relative to the live farm (mid-open farm switch / MP
+        -- live-add). Falls back to the display count if the exporter did not report one.
         local confirmationText = string.format(g_i18n:getText("ui_transaction_log_export_success"),
-            #self.transactions, csvFileName, displayPath)
+            exportedCount or #self.transactions, csvFileName, displayPath)
         InfoDialog.show(confirmationText)
+    elseif message == RmTransactionLogExporter.NO_DATA_MESSAGE then
+        -- Nothing for this farm to export (spectator, or a farm with no rows) - the honest
+        -- "no data" dialog, not the generic export error.
+        InfoDialog.show(g_i18n:getText("ui_transaction_log_export_no_data"))
     else
-        Log:error("CSV export failed: " .. message)
+        Log:error("CSV export failed: " .. tostring(message))
         InfoDialog.show(g_i18n:getText("ui_transaction_log_export_error"))
     end
 end

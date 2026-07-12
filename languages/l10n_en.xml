@@ -25,6 +25,7 @@
         <text name="ui_transaction_log_clear_yes" text="Clear Log"/>
         <text name="ui_transaction_log_clear_no" text="Cancel"/>
         <text name="ui_transaction_log_export_no_data" text="No transactions to export."/>
+        <text name="ui_transaction_log_spectator_hint" text="You are not a member of a farm. Join a farm to see its transaction log."/>
         <text name="ui_transaction_log_export_success" text="Successfully exported %d transactions to 
 file %s
 in folder %s"/>
