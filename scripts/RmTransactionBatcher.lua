@@ -144,7 +144,7 @@ end
 
 ---Flushes a specific batch, creating the final aggregated transaction
 ---@param batchKey string the batch key to flush
----@param logFunction function function to call with the aggregated transaction
+---@param logFunction function receives ONE record table (RmTransactionLog.logTransaction; TL-35), keys mirror the stored row
 function RmTransactionBatcher.flushBatch(batchKey, logFunction)
     local batch = RmTransactionBatcher.transactionBatches[batchKey]
     if not batch then
@@ -161,9 +161,20 @@ function RmTransactionBatcher.flushBatch(batchKey, logFunction)
         batchComment = string.format("Combined %d transactions", batch.count)
     end
 
-    -- Log the batched transaction with the captured snapshot, batch info in comment
-    logFunction(batch.totalAmount, batch.farmId, batch.title, batch.statistic,
-        batch.customEnv, batch.constant, batch.lastBalance, batchComment)
+    -- Log the batched transaction with the captured snapshot, batch info in comment. TL-35: pass a
+    -- record table (named fields), NOT positional args. Note the key renames (totalAmount -> amount,
+    -- lastBalance -> currentFarmBalance); a batch carries no enrichment context, so subjectId /
+    -- locationId / locationName are omitted (nil, as today -- batch-path threading is TL-22).
+    logFunction({
+        amount = batch.totalAmount,
+        farmId = batch.farmId,
+        title = batch.title,
+        statistic = batch.statistic,
+        customEnv = batch.customEnv,
+        constant = batch.constant,
+        currentFarmBalance = batch.lastBalance,
+        comment = batchComment,
+    })
 
     -- Clean up
     RmTransactionBatcher.batchTimers[batchKey] = nil

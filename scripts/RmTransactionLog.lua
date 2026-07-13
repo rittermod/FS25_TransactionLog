@@ -189,22 +189,48 @@ function RmTransactionLog.resolveStatistic(statistic)
     return g_i18n:getText("ui_transaction_log_no_data")
 end
 
+---@class RmTransactionRecord one captured transaction's raw inputs -- keys mirror the stored row.
+---@field amount number transaction amount (signed: negative = expense) -- required
+---@field farmId number the farm ID that performed the transaction -- required
+---@field title string|nil money-type title i18n key (moneyType.title, e.g. "finance_other")
+---@field statistic string|nil money-type statistic key (moneyType.statistic, e.g. "other")
+---@field customEnv string|nil owning mod env for the title key, best-effort (nil for base)
+---@field constant string|nil derived MoneyType constant name (e.g. "VEHICLE_REPAIR")
+---@field currentFarmBalance number|nil farm balance after the transaction (nil -> 0)
+---@field comment string|nil optional comment for the transaction (nil -> "")
+---@field subjectId string|nil enrichment WHAT: stable fillType/animal NAME key (nil until wired in TL-22..25)
+---@field locationId string|nil enrichment WHERE: placeable uniqueId string (nil until wired in TL-22..25)
+---@field locationName string|nil enrichment WHERE: placeable display-name snapshot (nil until wired in TL-22..25)
+
 ---Logs a single transaction to the transaction log.
 ---Stores the money-type snapshot RAW (i18n keys + identity), never resolved text -
 ---display resolution happens in the GUI/exporter, keeping the log language-agnostic.
----@param amount number transaction amount (signed: negative = expense)
----@param farmId number the farm ID that performed the transaction
----@param title string|nil money-type title i18n key (moneyType.title, e.g. "finance_other")
----@param statistic string|nil money-type statistic key (moneyType.statistic, e.g. "other")
----@param customEnv string|nil owning mod env for the title key, best-effort (nil for base)
----@param constant string|nil derived MoneyType constant name (e.g. "VEHICLE_REPAIR")
----@param currentFarmBalance number current farm balance after transaction
----@param comment string|nil optional comment for the transaction
----@param subjectId string|nil enrichment WHAT: stable fillType/animal NAME key (nil until wired in TL-19)
----@param locationId string|nil enrichment WHERE: placeable uniqueId string (nil until wired in TL-19)
----@param locationName string|nil enrichment WHERE: placeable display-name snapshot (nil until wired in TL-19)
-function RmTransactionLog.logTransaction(amount, farmId, title, statistic, customEnv, constant, currentFarmBalance,
-                                         comment, subjectId, locationId, locationName)
+---Takes ONE record table (TL-35) rather than positional params, so a field can only ever land in
+---its own row slot -- positional misalignment is impossible. A misspelled KEY still degrades to nil
+---under the `or` fallbacks below (the same silent failure a mistyped local had); the mapping test
+---pins the known fields.
+---@param record RmTransactionRecord the transaction fields (see RmTransactionRecord above)
+function RmTransactionLog.logTransaction(record)
+    -- GUARD FIRST: a nil / non-table record early-returns BEFORE any record.* read (indexing a
+    -- non-table raises in Lua 5.1) AND before the id allocation (so a bad call burns no id). Only
+    -- after this guard is it safe to read the named fields into locals (the body below stays
+    -- byte-identical to the positional version -- same local names, same order, same logic).
+    if record == nil or type(record) ~= "table" then
+        Log:warning("logTransaction called with non-table record: %s", tostring(record))
+        return
+    end
+    local amount = record.amount
+    local farmId = record.farmId
+    local title = record.title
+    local statistic = record.statistic
+    local customEnv = record.customEnv
+    local constant = record.constant
+    local currentFarmBalance = record.currentFarmBalance
+    local comment = record.comment
+    local subjectId = record.subjectId
+    local locationId = record.locationId
+    local locationName = record.locationName
+
     -- Parameter validation
     if amount == nil then
         Log:warning("logTransaction called with nil amount")
@@ -1071,12 +1097,21 @@ function RmTransactionLog.changeFarmBalance(self, amount, moneyType, ...)
         RmTransactionBatcher.addToBatch(amount, self.farmId, moneyType, constant, currentBalance,
             RmTransactionLog.logTransaction)
     else
-        -- DIRECT path threads the consumed context. The explicit nil `comment` (param 8) is REQUIRED:
-        -- subjectId/locationId/locationName are params 9/10/11, so a bare append without the placeholder
-        -- would land subjectId in `comment` and drop locationName. (TL-35 replaces this positional call
-        -- with a record table; the placeholder is the correct interim.)
-        RmTransactionLog.logTransaction(amount, self.farmId, moneyType.title, moneyType.statistic,
-            moneyType.customEnv, constant, currentBalance, nil, subjectId, locationId, locationName)
+        -- DIRECT path threads the consumed TL-19 context locals into a record (TL-35). Named fields
+        -- make positional misalignment impossible, so no explicit `comment` placeholder is needed --
+        -- `comment` is simply omitted and defaults to "" in logTransaction (TL-22 threads batch context).
+        RmTransactionLog.logTransaction({
+            amount = amount,
+            farmId = self.farmId,
+            title = moneyType.title,
+            statistic = moneyType.statistic,
+            customEnv = moneyType.customEnv,
+            constant = constant,
+            currentFarmBalance = currentBalance,
+            subjectId = subjectId,
+            locationId = locationId,
+            locationName = locationName,
+        })
     end
 end
 
