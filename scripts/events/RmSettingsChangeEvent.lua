@@ -13,7 +13,7 @@
 --          registered with InitEventClass (NOT InitStaticEventClass, which is base-game-internal and
 --          raises "attempt to call a string value" in the mod sandbox). Payload is
 --          (settingId:String, value:Int32) -- this event carries its OWN small payload, NOT the shared
---          11-field row codec (RmTransactionLogSync.writeRow), so it writes its two fields directly.
+--          14-field row codec (RmTransactionLogSync.writeRow), so it writes its two fields directly.
 --          value is Int32 because all current setting values are integer enum codes (autoExportFrequency
 --          = {0,1,2,3}) and setValue gates on exact == membership -- Int32 is drift-proof and removes any
 --          float-equality question. A future boolean/string-typed setting must extend this codec.

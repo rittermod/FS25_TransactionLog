@@ -8,7 +8,7 @@
 -- Pattern: the same 5-method object-less Event as RmAddTransactionEvent -- registered with
 --          InitEventClass (NOT InitStaticEventClass, which is base-game-internal and raises "attempt
 --          to call a string value" in the mod sandbox). Payload is (id:Int32, comment:String) -- a
---          by-id edit, NOT the shared 11-field row codec (this event carries no row), so it writes
+--          by-id edit, NOT the shared 14-field row codec (this event carries no row), so it writes
 --          its two fields directly instead of delegating to RmTransactionLogSync.writeRow.
 -- Flow:    run() branches on authority (g_server). This is the OPPOSITE of the add/snapshot events'
 --          `if g_server ~= nil then return end` guard -- here the SERVER does the work and a pure

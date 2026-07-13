@@ -190,8 +190,11 @@ end
 ---@param constant string|nil derived MoneyType constant name (e.g. "VEHICLE_REPAIR")
 ---@param currentFarmBalance number current farm balance after transaction
 ---@param comment string|nil optional comment for the transaction
+---@param subjectId string|nil enrichment WHAT: stable fillType/animal NAME key (nil until wired in TL-19)
+---@param locationId string|nil enrichment WHERE: placeable uniqueId string (nil until wired in TL-19)
+---@param locationName string|nil enrichment WHERE: placeable display-name snapshot (nil until wired in TL-19)
 function RmTransactionLog.logTransaction(amount, farmId, title, statistic, customEnv, constant, currentFarmBalance,
-                                         comment)
+                                         comment, subjectId, locationId, locationName)
     -- Parameter validation
     if amount == nil then
         Log:warning("logTransaction called with nil amount")
@@ -240,7 +243,9 @@ function RmTransactionLog.logTransaction(amount, farmId, title, statistic, custo
     local id = RmTransactionLog.nextTransactionId
     RmTransactionLog.nextTransactionId = id + 1
     -- Store keys/identity RAW; resolve to display text only in the GUI/exporter.
-    -- Empty customEnv/constant normalize to nil (never concat/getText onto nil).
+    -- Empty customEnv/constant/subjectId/locationId/locationName normalize to nil (never
+    -- concat/getText onto nil). TL-18 plumbs subject/location as additive nil-normalized fields;
+    -- no caller sets them yet -- capture is wired in TL-19.
     local transaction = {
         id = id,
         realDateTime = realDateTime,
@@ -253,6 +258,9 @@ function RmTransactionLog.logTransaction(amount, farmId, title, statistic, custo
         constant = (constant ~= "" and constant) or nil,
         currentFarmBalance = currentFarmBalance or 0,
         comment = comment or "",
+        subjectId = (subjectId ~= "" and subjectId) or nil,
+        locationId = (locationId ~= "" and locationId) or nil,
+        locationName = (locationName ~= "" and locationName) or nil,
     }
 
     table.insert(RmTransactionLog.transactions, transaction)
@@ -1091,6 +1099,11 @@ function RmTransactionLog.saveToXmlFile(self)
         setXMLString(xmlFile, transactionKey .. "#constant", transaction.constant or "")
         setXMLFloat(xmlFile, transactionKey .. "#currentFarmBalance", transaction.currentFarmBalance or 0)
         setXMLString(xmlFile, transactionKey .. "#comment", transaction.comment or "")
+        -- Additive enrichment attrs (TL-18): nil -> "". No schemaVersion bump (stays 2), same
+        -- additive precedent as the TL-7 `#id`. A pre-enrichment save simply lacks them.
+        setXMLString(xmlFile, transactionKey .. "#subjectId", transaction.subjectId or "")
+        setXMLString(xmlFile, transactionKey .. "#locationId", transaction.locationId or "")
+        setXMLString(xmlFile, transactionKey .. "#locationName", transaction.locationName or "")
         i = i + 1
     end
 
@@ -1190,6 +1203,12 @@ function RmTransactionLog.loadFromXMLFile()
         else
             local customEnv = getXMLString(xmlFile, transactionKey .. "#customEnv")
             local constant = getXMLString(xmlFile, transactionKey .. "#constant")
+            -- Additive enrichment attrs (TL-18). getXMLString returns nil for an absent attr, so use
+            -- the nil-guarded three-part form; each normalizes INDEPENDENTLY (no cross-field coupling)
+            -- and a pre-enrichment v2 save (attrs absent) loads all three as nil.
+            local subjectId = getXMLString(xmlFile, transactionKey .. "#subjectId")
+            local locationId = getXMLString(xmlFile, transactionKey .. "#locationId")
+            local locationName = getXMLString(xmlFile, transactionKey .. "#locationName")
             table.insert(rows, {
                 -- getXMLInt -> integer|nil; deriveLoadedIds repairs nil / invalid below.
                 id = getXMLInt(xmlFile, transactionKey .. "#id"),
@@ -1203,6 +1222,9 @@ function RmTransactionLog.loadFromXMLFile()
                 constant = (constant ~= nil and constant ~= "" and constant) or nil,
                 currentFarmBalance = getXMLFloat(xmlFile, transactionKey .. "#currentFarmBalance") or 0,
                 comment = getXMLString(xmlFile, transactionKey .. "#comment") or "",
+                subjectId = (subjectId ~= nil and subjectId ~= "" and subjectId) or nil,
+                locationId = (locationId ~= nil and locationId ~= "" and locationId) or nil,
+                locationName = (locationName ~= nil and locationName ~= "" and locationName) or nil,
             })
         end
     end
