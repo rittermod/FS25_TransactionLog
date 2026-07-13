@@ -30,6 +30,16 @@ RmTransactionLog.previousDate = nil          -- Format: "YYYY-MM-DD"
 RmTransactionLog.previousCalendarMonth = nil -- Format: "YYYY-MM"
 RmTransactionLog.previousCalendarYear = nil  -- Format: "YYYY"
 
+-- Pending-context holder (TL-19): a synchronous set/consume-once channel that hands a subject (WHAT)
+-- and a location (WHERE) from a call-site into the universal Farm.changeBalance sink, which sees only
+-- farm / amount / moneyType. A call-site prepend-hook sets these IMMEDIATELY before the intended
+-- addMoney; changeFarmBalance consumes them once at entry (clearing all three) and threads them into
+-- the DIRECT logTransaction call. Default nil; set on the authority only (setPendingContext is
+-- g_server-guarded). No caller sets them yet -- the real capture hooks are TL-22..25.
+RmTransactionLog.pendingSubjectId = nil    -- stable fillType / animal NAME key (verbatim)
+RmTransactionLog.pendingLocationId = nil   -- placeable uniqueId string (verbatim)
+RmTransactionLog.pendingLocationName = nil -- placeable display-name snapshot (verbatim)
+
 ---Creates a new RmTransactionLog instance
 ---@param customMt table|nil optional custom metatable
 ---@return table the new transaction log instance
@@ -245,7 +255,8 @@ function RmTransactionLog.logTransaction(amount, farmId, title, statistic, custo
     -- Store keys/identity RAW; resolve to display text only in the GUI/exporter.
     -- Empty customEnv/constant/subjectId/locationId/locationName normalize to nil (never
     -- concat/getText onto nil). TL-18 plumbs subject/location as additive nil-normalized fields;
-    -- no caller sets them yet -- capture is wired in TL-19.
+    -- TL-19 consumes the pending-context holder in changeFarmBalance and threads it here on the DIRECT
+    -- path, but no real call-site sets context yet -- that is TL-22..25, so these stay nil in play.
     local transaction = {
         id = id,
         realDateTime = realDateTime,
@@ -429,6 +440,49 @@ function RmTransactionLog.requestCommentEdit(id, comment)
             end
         end
     end
+end
+
+-- ============================================================
+-- Pending context (TL-19): synchronous set/consume-once channel for transaction enrichment.
+-- A call-site prepend-hook stashes a subject/location here IMMEDIATELY before the intended addMoney;
+-- changeFarmBalance consumes it once at entry. Mechanism only -- no call-site hooks yet (TL-22..25).
+-- ============================================================
+
+---Stash the subject (WHAT) + location (WHERE) for the NEXT authoritative changeBalance. Each arg is
+---optional (absent -> nil). AUTHORITY-GUARDED: a no-op on a pure client (g_server == nil) so a stray or
+---future client-side set can never seed stale context -- capture is server-authoritative, and a client's
+---changeFarmBalance no-ops at its own g_server guard anyway. Grammar-agnostic: stores whatever strings are
+---passed VERBATIM (the "" -> nil normalization + any grammar live at the capture hooks / logTransaction,
+---not here). The real contract for the capture hooks: call this synchronously right before the addMoney,
+---because a single global holder is safe ONLY within one synchronous set->consume stack (Design Notes F6).
+---@param subjectId string|nil stable fillType / animal NAME key
+---@param locationId string|nil placeable uniqueId string
+---@param locationName string|nil placeable display-name snapshot
+function RmTransactionLog.setPendingContext(subjectId, locationId, locationName)
+    if g_server == nil then return end
+    RmTransactionLog.pendingSubjectId = subjectId
+    RmTransactionLog.pendingLocationId = locationId
+    RmTransactionLog.pendingLocationName = locationName
+end
+
+---Atomically read-and-clear the pending context. Returns subjectId, locationId, locationName IN THAT
+---ORDER (matching setPendingContext and logTransaction's trailing params) and resets all three fields to
+---nil in the one call. A second consume before the next set returns all-nil -- intentional consume-once,
+---not an error. This is the single clear point: changeFarmBalance calls it once at entry so EVERY
+---authoritative changeBalance clears the holder, which is the leak guarantee (context can never cross to
+---a LATER unrelated transaction). NOT called from logTransaction -- that runs again at batch flush, when
+---the holder is unrelated; the flushed row gets nil via logTransaction's explicit args.
+---@return string|nil subjectId
+---@return string|nil locationId
+---@return string|nil locationName
+function RmTransactionLog.consumePendingContext()
+    local subjectId = RmTransactionLog.pendingSubjectId
+    local locationId = RmTransactionLog.pendingLocationId
+    local locationName = RmTransactionLog.pendingLocationName
+    RmTransactionLog.pendingSubjectId = nil
+    RmTransactionLog.pendingLocationId = nil
+    RmTransactionLog.pendingLocationName = nil
+    return subjectId, locationId, locationName
 end
 
 -- ============================================================
@@ -964,6 +1018,13 @@ end
 function RmTransactionLog.changeFarmBalance(self, amount, moneyType, ...)
     -- Server-authority guard: a joining client no-ops here; SP/host/dedi are always authority.
     if g_server == nil then return end
+    -- Consume the pending context ONCE, as the FIRST statement after the guard -- before the trace
+    -- logs, the self / amount / farmId guards, and getBalance -- so EVERY authoritative changeBalance
+    -- clears the holder (even an early-returning, malformed, or batched one). This is the leak
+    -- guarantee: a synchronously NESTED changeBalance (e.g. fired from within getBalance) finds the
+    -- holder already cleared, so nothing crosses to a later transaction. Only the DIRECT path below
+    -- threads these locals into logTransaction; a batchable outer forwards nothing (threading is TL-22).
+    local subjectId, locationId, locationName = RmTransactionLog.consumePendingContext()
     Log:trace("Farm balance changed with parameters:")
     Log:trace(RmLogging.functionParametersToString(self, amount, moneyType, ...))
 
@@ -1010,8 +1071,12 @@ function RmTransactionLog.changeFarmBalance(self, amount, moneyType, ...)
         RmTransactionBatcher.addToBatch(amount, self.farmId, moneyType, constant, currentBalance,
             RmTransactionLog.logTransaction)
     else
+        -- DIRECT path threads the consumed context. The explicit nil `comment` (param 8) is REQUIRED:
+        -- subjectId/locationId/locationName are params 9/10/11, so a bare append without the placeholder
+        -- would land subjectId in `comment` and drop locationName. (TL-35 replaces this positional call
+        -- with a record table; the placeholder is the correct interim.)
         RmTransactionLog.logTransaction(amount, self.farmId, moneyType.title, moneyType.statistic,
-            moneyType.customEnv, constant, currentBalance)
+            moneyType.customEnv, constant, currentBalance, nil, subjectId, locationId, locationName)
     end
 end
 
