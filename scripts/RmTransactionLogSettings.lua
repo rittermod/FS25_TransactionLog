@@ -161,13 +161,108 @@ function RmTransactionLogSettings:getStateIndex(id, inputValue)
     return setting.default or 1
 end
 
+-- =============================================================================
+-- SETTINGS-FILE PATH RESOLUTION + ONE-TIME LOAD MIGRATION (TL-34)
+-- The settings file was historically written to
+--   modSettings/FS25_TransactionLogFS25_TransactionLog.xml   (mod name DOUBLED)
+-- because Utils.getFilename concatenates baseDir .. filename with NO separator and the base string
+-- lacked a trailing slash. These pure helpers resolve BOTH the correct nested path
+-- and the byte-faithful legacy path so writeSettings/readSettings share ONE source of truth (they
+-- can never diverge again), and readSettings can run a one-time migration that relocates an orphaned
+-- legacy file - deleting the old copy ONLY after the new one is proven loadable, so no user's
+-- settings are ever lost. They are RmTransactionLogSettings.* module functions (not file-locals) so
+-- RmSettingsPathTests can drive them directly.
+-- =============================================================================
+
+---Resolves the settings-file paths from the mod-settings directory. PURE (Utils.getFilename is
+---string-only, no disk access). The legacy path reproduces the EXACT pre-fix expression so an
+---orphaned doubled-name file is detected byte-for-byte.
+---@param dir string|nil g_modSettingsDirectory (nil on a headless / early-load edge)
+---@return string|nil newPath nested correct path (.../FS25_TransactionLog/FS25_TransactionLog.xml); nil if dir is nil
+---@return string|nil legacyPath doubled-name path (.../FS25_TransactionLogFS25_TransactionLog.xml); nil if dir is nil
+function RmTransactionLogSettings.resolveSettingsPaths(dir)
+    if dir == nil then
+        return nil, nil
+    end
+    local base = dir .. "/FS25_TransactionLog"
+    -- Trailing slash -> Utils.getFilename returns base.."/"..filename (correct nested file).
+    local newPath = Utils.getFilename("FS25_TransactionLog.xml", base .. "/")
+    -- No trailing slash -> the original bug: base..filename fuses folder and filename.
+    local legacyPath = Utils.getFilename("FS25_TransactionLog.xml", base)
+    return newPath, legacyPath
+end
+
+---Whether the one-time relocation should run: only when the correct nested file is ABSENT but a
+---doubled-name legacy file EXISTS. PURE. Once the new file exists this is false forever (the
+---migration is self-limiting).
+---@param newExists boolean does the nested correct file exist
+---@param legacyExists boolean does the doubled-name legacy file exist
+---@return boolean
+function RmTransactionLogSettings.shouldMigrate(newExists, legacyExists)
+    return (not newExists) and legacyExists
+end
+
+---Chooses which file to read and whether the legacy copy is now safe to delete. PURE. Deletes
+---legacy ONLY when the new file is proven loadable, so a corrupt/failed copy never destroys the good
+---legacy settings; a missing/unreadable new file falls back to reading legacy in place and KEEPS it.
+---@param newReadable boolean is the nested file present AND loadable (isXmlLoadable)
+---@param legacyExists boolean does the doubled-name legacy file exist
+---@return table plan { read = "new"|"legacy"|"default", deleteLegacy = boolean }
+function RmTransactionLogSettings.chooseReadPlan(newReadable, legacyExists)
+    if newReadable then
+        return { read = "new", deleteLegacy = legacyExists }
+    elseif legacyExists then
+        return { read = "legacy", deleteLegacy = false }
+    else
+        return { read = "default", deleteLegacy = false }
+    end
+end
+
+---Whether an XML file exists AND parses. Engine I/O (NOT pure): loadXMLFile returns 0 on a missing /
+---0-byte / corrupt file; a non-zero handle is deleted immediately. This is the gate that guarantees a
+---legacy file is never deleted in favour of an unreadable new copy.
+---@param path string|nil
+---@return boolean loadable
+function RmTransactionLogSettings.isXmlLoadable(path)
+    if path == nil then
+        return false
+    end
+    if not fileExists(path) then
+        return false
+    end
+    local handle = loadXMLFile("transactionLogSettings", path)
+    if handle == 0 then
+        return false
+    end
+    delete(handle)
+    return true
+end
+
+---Collapses duplicate slashes so a delete inside modSettings is accepted. A mod may only delete files
+---under its own modSettings folder, and that path check compares the path as-is - it does NOT collapse
+---a doubled slash. `g_modSettingsDirectory` ends in "/", so `resolveSettingsPaths` paths carry a
+---harmless `//` (the filesystem collapses it for read/write/copy), but the delete is REFUSED for a path
+---that still contains the `//`, even though it names a real file. Collapse the `//` first. PURE
+---(string-only).
+---@param path string|nil
+---@return string|nil
+function RmTransactionLogSettings.toDeletablePath(path)
+    if path == nil then
+        return nil
+    end
+    return (path:gsub("//+", "/"))
+end
+
 ---Writes all settings to XML file
 function RmTransactionLogSettings:writeSettings()
     -- Server-authority guard: settings persistence is server-side; a client no-ops.
     if g_server == nil then return end
     local key = "transactionLogSettings"
-    local userSettingsFile = Utils.getFilename("FS25_TransactionLog.xml",
-        g_modSettingsDirectory .. "/FS25_TransactionLog")
+    local userSettingsFile = RmTransactionLogSettings.resolveSettingsPaths(g_modSettingsDirectory)
+    if userSettingsFile == nil then
+        Log:warning("Cannot write settings: g_modSettingsDirectory is nil")
+        return
+    end
 
     local xmlFile = createXMLFile("settings", userSettingsFile, key)
     if xmlFile ~= 0 then
@@ -204,14 +299,61 @@ end
 function RmTransactionLogSettings:readSettings()
     -- Server-authority guard: settings persistence is server-side; a client no-ops.
     if g_server == nil then return end
-    local userSettingsFile = Utils.getFilename("FS25_TransactionLog.xml",
-        g_modSettingsDirectory .. "/FS25_TransactionLog")
 
-    if not fileExists(userSettingsFile) then
-        Log:info("Creating default settings file: " .. userSettingsFile)
+    local newPath, legacyPath = RmTransactionLogSettings.resolveSettingsPaths(g_modSettingsDirectory)
+    if newPath == nil then
+        Log:warning("Cannot read settings: g_modSettingsDirectory is nil")
+        return
+    end
+
+    -- One-time load migration (TL-34): if only the doubled-name legacy file exists, copy it into the
+    -- correct nested path. overwrite=true is harmless here - shouldMigrate already proved new is absent.
+    -- Precondition: RmTransactionLog.loadMap createFolders the nested dir immediately before calling
+    -- readSettings, so the copy destination exists; a copy that still fails falls back to reading the
+    -- legacy file in place (no data loss).
+    local didMigrate = RmTransactionLogSettings.shouldMigrate(fileExists(newPath), fileExists(legacyPath))
+    if didMigrate then
+        copyFile(legacyPath, newPath, true)
+    end
+
+    -- Decide what to read and whether the legacy copy is now safe to remove. Judge success by the
+    -- post-op state (loadable + fileExists), never the native copy/delete return. Legacy is deleted
+    -- ONLY when the new file is proven loadable, so a failed/corrupt copy leaves the good legacy intact.
+    local newReadable = RmTransactionLogSettings.isXmlLoadable(newPath)
+    local plan = RmTransactionLogSettings.chooseReadPlan(newReadable, fileExists(legacyPath))
+
+    if plan.deleteLegacy then
+        -- Normalise "//" before the delete: the modSettings delete restriction refuses a path that
+        -- still contains the doubled slash, even though it names a real file (see toDeletablePath). A
+        -- refused/failed delete is non-fatal - the correct nested file is already written and read.
+        local deletablePath = RmTransactionLogSettings.toDeletablePath(legacyPath)
+        deleteFile(deletablePath)
+        if fileExists(deletablePath) then
+            Log:warning("Could not remove legacy settings file: " .. deletablePath)
+        elseif didMigrate then
+            Log:info("Migrated settings into " .. newPath .. " and removed the legacy file")
+        else
+            Log:info("Removed stale legacy settings file: " .. deletablePath)
+        end
+    end
+
+    if plan.read == "default" then
+        -- unreadable-new (corrupt nested file, no legacy) is distinct from a fresh install: WARN so the
+        -- reset-to-defaults is diagnosable (honours the spec's "unreadable-new -> WARNING" log rule).
+        if fileExists(newPath) then
+            Log:warning("Existing settings file is unreadable; recreating defaults: " .. newPath)
+        else
+            Log:info("Creating default settings file: " .. newPath)
+        end
         self:writeSettings()
         return
     end
+
+    if plan.read == "legacy" then
+        Log:warning("New settings file missing or unreadable; reading legacy file in place: " .. legacyPath)
+    end
+
+    local userSettingsFile = (plan.read == "new") and newPath or legacyPath
 
     local xmlFile = loadXMLFile("transactionLogSettings", userSettingsFile)
     if xmlFile ~= 0 then
