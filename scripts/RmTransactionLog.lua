@@ -13,8 +13,8 @@ RmTransactionLog.UPDATE_INTERVAL = 1000 -- Check batches every 1 second (1000ms)
 -- Canonical maximum comment length (codepoints). This is the SINGLE source of truth for the
 -- 200-char cap: the GUI input dialog references it (RmTransactionLogFrame.MAX_COMMENT_LENGTH) and
 -- the server-authoritative edit path re-clamps to it, so a crafted RmEditCommentEvent can never
--- persist an oversized comment. Defined BEFORE the source() chain below so the frame, sourced
--- there, can read it at load time.
+-- persist an oversized comment. Defined at load so the frame can read it: main.lua orders this
+-- module ahead of gui/RmTransactionLogFrame, which copies the constant at load time.
 RmTransactionLog.MAX_COMMENT_LENGTH = 200
 
 -- Table to store transactions at the module level.
@@ -54,23 +54,10 @@ function RmTransactionLog.new(customMt)
     return self
 end
 
+-- Mod directory, read at RUNTIME by the GUI-load sites (RmTransactionLog.showDialog,
+-- RmTransactionLogFrame, RmCommentInputDialog). This is NOT used for sourcing: main.lua owns the
+-- load order and sources every module via its own g_currentModDirectory.
 RmTransactionLog.dir = g_currentModDirectory
-source(RmTransactionLog.dir .. "scripts/gui/RmTransactionLogFrame.lua")
-source(RmTransactionLog.dir .. "scripts/gui/RmCommentInputDialog.lua")
-source(RmTransactionLog.dir .. "scripts/rmlib/RmLogging.lua")
-source(RmTransactionLog.dir .. "scripts/RmTransactionBatcher.lua")
-source(RmTransactionLog.dir .. "scripts/RmTransactionLogSettings.lua")
-source(RmTransactionLog.dir .. "scripts/RmTransactionLogExporter.lua")
-source(RmTransactionLog.dir .. "scripts/RmTransactionMigration.lua")
--- MP event layer (2.0; under construction). Sourced under the still-off multiplayer flag so
--- both files are present on server AND client when the flag flips at TL-12
--- (mp-event-not-sourced-on-client). Sync codec FIRST so the event can delegate to it.
-source(RmTransactionLog.dir .. "scripts/RmTransactionLogSync.lua")
-source(RmTransactionLog.dir .. "scripts/events/RmAddTransactionEvent.lua")
-source(RmTransactionLog.dir .. "scripts/events/RmTransactionSnapshotEvent.lua")
-source(RmTransactionLog.dir .. "scripts/events/RmEditCommentEvent.lua")
-source(RmTransactionLog.dir .. "scripts/events/RmSettingsChangeEvent.lua")
-source(RmTransactionLog.dir .. "scripts/events/RmClearLogEvent.lua")
 
 local Log = RmLogging.getLogger("TransactionLog")
 Log:setLevel("DEBUG") -- Uncomment to enable debug logging

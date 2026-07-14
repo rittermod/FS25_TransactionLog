@@ -17,7 +17,7 @@
 --          as the game's own money sync does -- correct, not a shortcut.
 -- Scope:   TL-9 ships the codec ONLY. The delivery machinery (sendToFarm targeting, the
 --          snapshot builder, the farm-change handler) is TL-10/TL-11.
--- Sourced: by RmTransactionLog.lua's chain, which loads on server AND client.
+-- Sourced: by main.lua's ordered chain (before the events that delegate to it), on server AND client.
 
 RmTransactionLogSync = {}
 

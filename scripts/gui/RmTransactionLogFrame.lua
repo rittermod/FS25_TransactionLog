@@ -9,8 +9,9 @@ local Log = RmLogging.getLogger("TransactionLog")
 
 -- Constants
 -- Canonical comment length lives in RmTransactionLog (event-reachable); the frame references it so
--- the GUI input cap and the server-side clamp can never drift. RmTransactionLog is defined and its
--- constant set before this file is sourced (see the source() chain in RmTransactionLog.lua).
+-- the GUI input cap and the server-side clamp can never drift. main.lua orders the load
+-- Settings -> RmTransactionLog -> this frame, so RmTransactionLog and its constant are defined before
+-- this file is sourced; reordering it after the frame would nil-index the copy below at load.
 RmTransactionLogFrame.MAX_COMMENT_LENGTH = RmTransactionLog.MAX_COMMENT_LENGTH
 
 -- UI Color constants (cached for performance)
