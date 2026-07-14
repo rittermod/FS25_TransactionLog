@@ -37,8 +37,8 @@ RmTransactionLog.previousCalendarYear = nil  -- Format: "YYYY"
 -- into BOTH the DIRECT logTransaction record AND (TL-22) the batchable addToBatch call. Storage is FIVE
 -- scalar module fields behind a RECORD-shaped API (TL-36 decision 2a): setPendingContext(context) reads
 -- context.<field>, consumePendingContext() RETURNS a record + clears the scalars. Default nil; set on the
--- authority only (setPendingContext is g_server-guarded). No caller sets them yet -- the real capture
--- hooks are TL-23..28.
+-- authority only (setPendingContext is g_server-guarded). SellingStation sales set the subject via the
+-- TL-26 capture hook; the remaining capture sites are TL-24/25/27/28.
 RmTransactionLog.pendingSubjectId = nil    -- best-effort key: fillType/animal name, store-item xmlFilename, or nil (verbatim)
 RmTransactionLog.pendingSubjectName = nil  -- always-set display snapshot (capture-hook contract; verbatim)
 RmTransactionLog.pendingSubjectKind = nil  -- open-vocab kind: fillType/animal/storeItem seeds (verbatim)
@@ -190,11 +190,11 @@ end
 ---@field constant string|nil derived MoneyType constant name (e.g. "VEHICLE_REPAIR")
 ---@field currentFarmBalance number|nil farm balance after the transaction (nil -> 0)
 ---@field comment string|nil optional comment for the transaction (nil -> "")
----@field subjectId string|nil enrichment WHAT: best-effort stable key (fillType/animal name, store-item xmlFilename, or nil) (nil until wired in TL-23..28)
----@field subjectName string|nil enrichment WHAT: always-set resolved display snapshot (capture-hook contract; nil until TL-23..28)
----@field subjectKind string|nil enrichment WHAT: open-vocab kind discriminator (fillType/animal/storeItem seeds; nil until TL-23..28)
----@field locationId string|nil enrichment WHERE: placeable uniqueId string (nil until wired in TL-23..28)
----@field locationName string|nil enrichment WHERE: placeable display-name snapshot (nil until wired in TL-23..28)
+---@field subjectId string|nil enrichment WHAT: best-effort stable key (fillType/animal name, store-item xmlFilename, or nil) (set for SellingStation sales since TL-26; other capture sites TL-24/25/27/28)
+---@field subjectName string|nil enrichment WHAT: always-set resolved display snapshot (capture-hook contract; set for SellingStation sales since TL-26; other sites TL-24/25/27/28)
+---@field subjectKind string|nil enrichment WHAT: open-vocab kind discriminator (fillType/animal/storeItem seeds; set for SellingStation sales since TL-26; other sites TL-24/25/27/28)
+---@field locationId string|nil enrichment WHERE: placeable uniqueId string (nil until location capture lands, E2.4)
+---@field locationName string|nil enrichment WHERE: placeable display-name snapshot (nil until location capture lands, E2.4)
 
 ---Logs a single transaction to the transaction log.
 ---Stores the money-type snapshot RAW (i18n keys + identity), never resolved text -
@@ -278,8 +278,9 @@ function RmTransactionLog.logTransaction(record)
     -- Empty customEnv/constant/subjectId/subjectName/subjectKind/locationId/locationName normalize to
     -- nil (never concat/getText onto nil), each INDEPENDENTLY. TL-18/TL-36 plumb subject/location as
     -- additive nil-normalized fields; TL-19 consumes the pending-context holder in changeFarmBalance and
-    -- threads it here on the DIRECT path, but no real call-site sets context yet -- that is TL-23..28, so
-    -- these stay nil in play. subjectId is a best-effort key; subjectName is the always-set display
+    -- threads it here on the DIRECT path. SellingStation sales set the subject via the TL-26 capture hook
+    -- (other capture sites TL-24/25/27/28); a txn with no captured subject records these nil. subjectId is
+    -- a best-effort key; subjectName is the always-set display
     -- snapshot (a capture-hook contract, not enforced here); subjectKind is an open-vocab discriminator.
     local transaction = {
         id = id,
@@ -471,7 +472,8 @@ end
 -- ============================================================
 -- Pending context (TL-19): synchronous set/consume-once channel for transaction enrichment.
 -- A call-site prepend-hook stashes a subject/location here IMMEDIATELY before the intended addMoney;
--- changeFarmBalance consumes it once at entry. Mechanism only -- no call-site hooks yet (TL-22..25).
+-- changeFarmBalance consumes it once at entry. SellingStation sales set it via the TL-26 hook; the
+-- remaining capture sites are TL-24/25/27/28.
 -- ============================================================
 
 ---Stash the subject (WHAT) + location (WHERE) for the NEXT authoritative changeBalance. Takes ONE
@@ -517,6 +519,85 @@ function RmTransactionLog.consumePendingContext()
     RmTransactionLog.pendingLocationId = nil
     RmTransactionLog.pendingLocationName = nil
     return context
+end
+
+-- ============================================================
+-- SellingStation subject capture (TL-26): the mod's FIRST prepend. Reads the sold fillType off
+-- SellingStation.sellFillType BEFORE the engine credits the money, and stashes it as the pending
+-- subject (via setPendingContext) so the already-appended changeFarmBalance consumes it and the sale's
+-- row carries the fill type. Location stays nil (E2.4); ProductionPoint direct-sell is a later ticket.
+-- ============================================================
+
+-- One-shot install guard: set true once the prepend is wrapped, so a second install call (a stray
+-- re-source or a test) never stacks a second prepend on the shared SellingStation.sellFillType chain.
+RmTransactionLog.sellFillTypeHookInstalled = false
+
+---Prepend callback for SellingStation.sellFillType: resolve the sold fillType to a stable key + display
+---snapshot and stash it as the pending subject for the money credit that follows in the same synchronous
+---stack. The signature mirrors sellFillType's params so fillTypeIndex is read positionally (4th incl.
+---self). Server-authority is enforced ONCE, at setPendingContext (g_server-guarded) - deliberately NO
+---duplicate g_server guard here, so a client-side prepend is a harmless read that no-ops at the setter.
+---Empty-degrades (sets NO context, never raises) on a nil/0 farmId, a nil index, an absent
+---g_fillTypeManager, or a non-table desc; a desc with a nil name/title sets those fields nil
+---independently (the display fallback covers a nil subjectName).
+---@param sellingStation table the SellingStation instance (unused; present to mirror the hooked signature)
+---@param farmId number|nil the selling farm's id
+---@param fillDelta number|nil the amount sold (unused here; present to mirror the signature)
+---@param fillTypeIndex number|nil the sold fillType's runtime index
+function RmTransactionLog.captureSellFillTypeContext(sellingStation, farmId, fillDelta, fillTypeIndex, ...)
+    Log:trace("captureSellFillTypeContext: farmId=%s fillTypeIndex=%s",
+        tostring(farmId), tostring(fillTypeIndex))
+    -- Leak guard: addMoney credits changeBalance for amount 0 (a zero-price sale is consumed normally),
+    -- but EARLY-RETURNS without changeBalance when farmId is 0 (spectator) or the farm is unknown. A
+    -- context set for such a sale would never be consumed and would leak onto the NEXT server
+    -- transaction, so skip when farmId is nil/0. (A nonzero-but-unknown farmId is a bounded,
+    -- self-healing residual: the next capture-hook sale overwrites the holder.)
+    if farmId == nil or farmId == 0 then
+        Log:trace("  skipped: nil/0 farmId (leak guard)")
+        return
+    end
+    if fillTypeIndex == nil then
+        Log:trace("  skipped: nil fillTypeIndex")
+        return
+    end
+    if g_fillTypeManager == nil then
+        Log:trace("  skipped: g_fillTypeManager absent")
+        return
+    end
+    local fillType = g_fillTypeManager:getFillTypeByIndex(fillTypeIndex)
+    if type(fillType) ~= "table" then
+        Log:trace("  skipped: no fillType desc for index %s", tostring(fillTypeIndex))
+        return
+    end
+    -- .name is the stable UPPERCASE key ("BARLEY"); .title is the localized display snapshot ("Barley").
+    -- Each nil-normalizes independently downstream, so a desc missing either sets that field nil.
+    Log:trace("  set subject: id=%s name=%s kind=fillType",
+        tostring(fillType.name), tostring(fillType.title))
+    RmTransactionLog.setPendingContext({
+        subjectId = fillType.name,
+        subjectName = fillType.title,
+        subjectKind = "fillType",
+    })
+end
+
+---Install the SellingStation.sellFillType prepend ONCE, at file scope. Idempotent + presence-guarded:
+---wraps only when SellingStation and its sellFillType method exist AND the hook is not already installed;
+---a second call (a stray re-source or a test) is a silent no-op. Logs a WARNING and skips when the
+---target is absent (empty-degrade: the mod still loads; sales just record a nil subject).
+---@return boolean installedThisCall true if this call wrapped the prepend, false if already installed or skipped
+function RmTransactionLog.installSellingStationCaptureHook()
+    if RmTransactionLog.sellFillTypeHookInstalled then
+        return false
+    end
+    if SellingStation == nil or SellingStation.sellFillType == nil then
+        Log:warning("SellingStation.sellFillType unavailable; sold-fillType subject capture disabled")
+        return false
+    end
+    SellingStation.sellFillType = Utils.prependedFunction(
+        SellingStation.sellFillType, RmTransactionLog.captureSellFillTypeContext)
+    RmTransactionLog.sellFillTypeHookInstalled = true
+    Log:debug("Installed SellingStation.sellFillType subject-capture prepend")
+    return true
 end
 
 -- ============================================================
@@ -1470,6 +1551,11 @@ PlayerInputComponent.registerGlobalPlayerActionEvents = Utils.appendedFunction(
     PlayerInputComponent.registerGlobalPlayerActionEvents, RmTransactionLog.addPlayerActionEvents)
 
 Farm.changeBalance = Utils.appendedFunction(Farm.changeBalance, RmTransactionLog.changeFarmBalance)
+
+-- SellingStation subject capture (TL-26): install the sold-fillType prepend once, here at FILE scope
+-- (NOT in loadMap, which re-runs per mission and would stack duplicate prepends -- the once-per-process
+-- class-method-hook rule). This is the mod's first prepend; all prior hooks are appendedFunction.
+RmTransactionLog.installSellingStationCaptureHook()
 
 -- Join delivery (TL-11): append the snapshot send onto FSBaseMission.sendInitialClientState at FILE
 -- scope (NOT in loadMap). A class-method hook must be appended ONCE per process; loadMap re-runs per

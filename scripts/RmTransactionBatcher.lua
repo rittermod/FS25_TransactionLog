@@ -89,7 +89,7 @@ end
 ---farm+money-type (the key string gains normalized-empty segments, but the GROUPING is unchanged).
 ---@param farmId number the farm ID
 ---@param moneyTypeId number|nil the money type's runtime id
----@param subjectId string|nil enrichment WHAT: stable fillType/animal name key (nil until TL-26..28)
+---@param subjectId string|nil enrichment WHAT: stable fillType/animal name key (set for SellingStation sales since TL-26; other sites TL-24/25/27/28)
 ---@param locationId string|nil enrichment WHERE: placeable uniqueId (nil for a not-yet-saved placeable)
 ---@param locationName string|nil enrichment WHERE: placeable display-name snapshot
 ---@return string the batch key
@@ -114,14 +114,15 @@ end
 ---context record (TL-36 seam change: ONE record replaces the former 3 loose subjectId/locationId/
 ---locationName params) sits BEFORE logFunction (which stays last). subjectName/subjectKind ride the struct
 ---(carry-not-key, like locationName), set once at batch init (first-writer-wins on divergence);
----createBatchKey is UNCHANGED. In normal play all five fields are nil (no capture hook yet - TL-23..28),
----so the key degrades to the pre-TL-22 farm+money-type grouping and batching is unchanged.
+---createBatchKey is UNCHANGED. SellingStation sales populate the subject (TL-26; other capture sites
+---TL-24/25/27/28); a txn with no captured subject/location keys the same as before, so the key degrades
+---to the pre-TL-22 farm+money-type grouping and batching is unchanged.
 ---@param amount number transaction amount
 ---@param farmId number farm ID
 ---@param moneyType table money type (carries id/title/statistic/customEnv)
 ---@param constant string|nil derived MoneyType constant name
 ---@param currentFarmBalance number current farm balance
----@param context table|nil enrichment record {subjectId, subjectName, subjectKind, locationId, locationName} (any field nil until TL-23..28)
+---@param context table|nil enrichment record {subjectId, subjectName, subjectKind, locationId, locationName} (subject populated for SellingStation sales since TL-26; other sites TL-24/25/27/28)
 ---@param logFunction function function to call when batch is flushed (kept LAST)
 function RmTransactionBatcher.addToBatch(amount, farmId, moneyType, constant, currentFarmBalance,
                                          context, logFunction)
@@ -244,7 +245,8 @@ function RmTransactionBatcher.flushBatch(batchKey, logFunction)
     -- lastBalance -> currentFarmBalance). TL-22/TL-36: the batch now carries the 5-field subject/location
     -- context (keyed on subjectId+location, subjectName/subjectKind carried-not-keyed; stored once at
     -- addToBatch), so forward it here; logTransaction's (x ~= "" and x) or nil normalization handles all
-    -- five exactly as on the direct path (all nil in normal play until capture lands, TL-23..28).
+    -- five exactly as on the direct path (subject populated for SellingStation sales since TL-26; other
+    -- capture sites TL-24/25/27/28).
     logFunction({
         amount = batch.totalAmount,
         farmId = batch.farmId,
