@@ -37,13 +37,14 @@ RmTransactionLog.previousCalendarYear = nil  -- Format: "YYYY"
 -- into BOTH the DIRECT logTransaction record AND (TL-22) the batchable addToBatch call. Storage is FIVE
 -- scalar module fields behind a RECORD-shaped API (TL-36 decision 2a): setPendingContext(context) reads
 -- context.<field>, consumePendingContext() RETURNS a record + clears the scalars. Default nil; set on the
--- authority only (setPendingContext is g_server-guarded). SellingStation sales (TL-26) and animal trades
--- (TL-23) set the subject via capture hooks; the remaining capture sites are TL-24/25/27/28.
+-- authority only (setPendingContext is g_server-guarded). SellingStation sales (subject TL-26, location
+-- TL-25), animal trades (TL-23), and shop buy/sell (TL-24) set context via capture hooks; the remaining
+-- subject sites are TL-27/28 and location for production direct-sell is TL-28.
 RmTransactionLog.pendingSubjectId = nil    -- best-effort key: fillType/animal name, store-item xmlFilename, or nil (verbatim)
 RmTransactionLog.pendingSubjectName = nil  -- always-set display snapshot (capture-hook contract; verbatim)
 RmTransactionLog.pendingSubjectKind = nil  -- open-vocab kind: fillType/animal/storeItem seeds (verbatim)
-RmTransactionLog.pendingLocationId = nil   -- placeable uniqueId string (verbatim)
-RmTransactionLog.pendingLocationName = nil -- placeable display-name snapshot (verbatim)
+RmTransactionLog.pendingLocationId = nil   -- placeable uniqueId string, SellingStation sales since TL-25 (verbatim)
+RmTransactionLog.pendingLocationName = nil -- placeable display-name snapshot, SellingStation sales since TL-25 (verbatim)
 
 ---Creates a new RmTransactionLog instance
 ---@param customMt table|nil optional custom metatable
@@ -190,11 +191,11 @@ end
 ---@field constant string|nil derived MoneyType constant name (e.g. "VEHICLE_REPAIR")
 ---@field currentFarmBalance number|nil farm balance after the transaction (nil -> 0)
 ---@field comment string|nil optional comment for the transaction (nil -> "")
----@field subjectId string|nil enrichment WHAT: best-effort stable key (fillType/animal name, store-item xmlFilename, or nil) (set for SellingStation sales since TL-26 and animal trades since TL-23; other capture sites TL-24/25/27/28)
----@field subjectName string|nil enrichment WHAT: always-set resolved display snapshot (capture-hook contract; set for SellingStation sales since TL-26 and animal trades since TL-23; other sites TL-24/25/27/28)
----@field subjectKind string|nil enrichment WHAT: open-vocab kind discriminator (fillType/animal/storeItem seeds; set for SellingStation sales since TL-26 and animal trades since TL-23; other sites TL-24/25/27/28)
----@field locationId string|nil enrichment WHERE: placeable uniqueId string (nil until location capture lands, E2.4)
----@field locationName string|nil enrichment WHERE: placeable display-name snapshot (nil until location capture lands, E2.4)
+---@field subjectId string|nil enrichment WHAT: best-effort stable key (fillType/animal name, store-item xmlFilename, or nil) (set for SellingStation sales since TL-26, animal trades since TL-23, and shop buy/sell since TL-24; other subject sites TL-27/28)
+---@field subjectName string|nil enrichment WHAT: always-set resolved display snapshot (capture-hook contract; set for SellingStation sales since TL-26, animal trades since TL-23, and shop buy/sell since TL-24; other subject sites TL-27/28)
+---@field subjectKind string|nil enrichment WHAT: open-vocab kind discriminator (fillType/animal/storeItem seeds; set for SellingStation sales since TL-26, animal trades since TL-23, and shop buy/sell since TL-24; other subject sites TL-27/28)
+---@field locationId string|nil enrichment WHERE: placeable uniqueId string (set for SellingStation sales since TL-25; production direct-sell TL-28)
+---@field locationName string|nil enrichment WHERE: placeable display-name snapshot (set for SellingStation sales since TL-25; production direct-sell TL-28)
 
 ---Logs a single transaction to the transaction log.
 ---Stores the money-type snapshot RAW (i18n keys + identity), never resolved text -
@@ -278,10 +279,11 @@ function RmTransactionLog.logTransaction(record)
     -- Empty customEnv/constant/subjectId/subjectName/subjectKind/locationId/locationName normalize to
     -- nil (never concat/getText onto nil), each INDEPENDENTLY. TL-18/TL-36 plumb subject/location as
     -- additive nil-normalized fields; TL-19 consumes the pending-context holder in changeFarmBalance and
-    -- threads it here on the DIRECT path. SellingStation sales (TL-26) and animal trades (TL-23) set the
-    -- subject via capture hooks (animal trades take THIS direct path -- newAnimalsCost/soldAnimals are
-    -- non-batchable; other capture sites TL-24/25/27/28); a txn with no captured subject records these nil. subjectId is
-    -- a best-effort key; subjectName is the always-set display
+    -- threads it here on the DIRECT path. SellingStation sales set the subject (TL-26) AND location (TL-25);
+    -- animal trades (TL-23) set the subject and take THIS direct path (newAnimalsCost/soldAnimals are
+    -- non-batchable); shop buy/sell (TL-24) sets the subject; a txn with no captured subject/location records
+    -- these nil (other subject sites TL-27/28; production direct-sell location TL-28). subjectId is a
+    -- best-effort key; subjectName is the always-set display
     -- snapshot (a capture-hook contract, not enforced here); subjectKind is an open-vocab discriminator.
     local transaction = {
         id = id,
@@ -473,8 +475,9 @@ end
 -- ============================================================
 -- Pending context (TL-19): synchronous set/consume-once channel for transaction enrichment.
 -- A call-site prepend-hook stashes a subject/location here IMMEDIATELY before the intended addMoney;
--- changeFarmBalance consumes it once at entry. SellingStation sales (TL-26) and animal trades (TL-23) set
--- it via capture hooks; the remaining capture sites are TL-24/25/27/28.
+-- changeFarmBalance consumes it once at entry. SellingStation sales set the subject (TL-26) AND location
+-- (TL-25); animal trades (TL-23) and shop buy/sell (TL-24) set the subject; the remaining subject sites are
+-- TL-27/28 and location for production direct-sell is TL-28.
 -- ============================================================
 
 ---Stash the subject (WHAT) + location (WHERE) for the NEXT authoritative changeBalance. Takes ONE
@@ -523,61 +526,132 @@ function RmTransactionLog.consumePendingContext()
 end
 
 -- ============================================================
--- SellingStation subject capture (TL-26): the mod's FIRST prepend. Reads the sold fillType off
--- SellingStation.sellFillType BEFORE the engine credits the money, and stashes it as the pending
--- subject (via setPendingContext) so the already-appended changeFarmBalance consumes it and the sale's
--- row carries the fill type. Location stays nil (E2.4); ProductionPoint direct-sell is a later ticket.
+-- SellingStation subject + location capture (TL-26 subject / TL-25 location): the mod's FIRST prepend.
+-- Reads the sold fillType (WHAT) AND the station's location (WHERE) off SellingStation.sellFillType BEFORE
+-- the engine credits the money, and stashes them as ONE pending context (via setPendingContext) so the
+-- already-appended changeFarmBalance consumes it and the sale's row carries the fill type + the station.
+-- ProductionPoint direct-sell location is a later ticket (TL-28).
 -- ============================================================
 
 -- One-shot install guard: set true once the prepend is wrapped, so a second install call (a stray
 -- re-source or a test) never stacks a second prepend on the shared SellingStation.sellFillType chain.
 RmTransactionLog.sellFillTypeHookInstalled = false
 
----Prepend callback for SellingStation.sellFillType: resolve the sold fillType to a stable key + display
----snapshot and stash it as the pending subject for the money credit that follows in the same synchronous
----stack. The signature mirrors sellFillType's params so fillTypeIndex is read positionally (4th incl.
----self). Server-authority is enforced ONCE, at setPendingContext (g_server-guarded) - deliberately NO
----duplicate g_server guard here, so a client-side prepend is a harmless read that no-ops at the setter.
----Empty-degrades (sets NO context, never raises) on a nil/0 farmId, a nil index, an absent
----g_fillTypeManager, or a non-table desc; a desc with a nil name/title sets those fields nil
----independently (the display fallback covers a nil subjectName).
----@param sellingStation table the SellingStation instance (unused; present to mirror the hooked signature)
+---Resolve a selling station's WHERE (location) to an owning-placeable id + display-name snapshot. PURE and
+---RAISE-FREE BY CONSTRUCTION -- this runs inside the sellFillType prepend, and a raise there would prevent
+---the real sale -- so every access is type()-guarded and there is NO pcall. Returns two VALUE snapshots:
+---plain strings copied at call time, retaining NO reference to the placeable, so a placeable deleted before
+---the batch flush cannot cause a stale deref. No globals, no g_server read. The four load-bearing guards:
+---  1. OUTER: a non-table sellingStation returns nil, nil (indexing .owningPlaceable would otherwise raise).
+---  2. locationId: owningPlaceable:getUniqueId() ONLY when the placeable AND its getUniqueId are present;
+---     kept only when a non-empty string (nil/"" for a runtime-placed, not-yet-saved placeable).
+---  3. locationName primary (station label): sellingStation:getName() ONLY when getName AND the placeable
+---     AND placeable.getName are all present -- calling getName() on some stations can dereference the
+---     owning placeable, so without a present placeable (and its getName) it could raise and break the
+---     sale. Kept only when a non-empty string.
+---  4. locationName fallback (placeable name): when the primary yielded nil, owningPlaceable:getName()
+---     (placeable + getName guarded), kept only when a non-empty string. This deliberately surfaces the
+---     placeable's own name even when the station label came back empty -- benign and more informative (spec Ask First).
+---@param sellingStation table|nil the SellingStation instance
+---@return string|nil locationId the owning placeable's uniqueId (nil when absent / not-yet-saved / empty)
+---@return string|nil locationName the station label, else the placeable name, else nil
+function RmTransactionLog.resolveSellingStationLocation(sellingStation)
+    if type(sellingStation) ~= "table" then
+        return nil, nil
+    end
+    local placeable = sellingStation.owningPlaceable
+    local placeableIsTable = type(placeable) == "table"
+
+    local locationId = nil
+    if placeableIsTable and type(placeable.getUniqueId) == "function" then
+        local uid = placeable:getUniqueId()
+        if type(uid) == "string" and uid ~= "" then
+            locationId = uid
+        end
+    end
+
+    local locationName = nil
+    -- Primary: the station's own label. Calling getName() on some stations can dereference the owning
+    -- placeable, so BOTH the placeable and its getName must be present before the call, to stay raise-free.
+    if type(sellingStation.getName) == "function" and placeableIsTable
+        and type(placeable.getName) == "function" then
+        local name = sellingStation:getName()
+        if type(name) == "string" and name ~= "" then
+            locationName = name
+        end
+    end
+    -- Fallback: the owning placeable's own name (surfaced when the station label came back empty).
+    if locationName == nil and placeableIsTable and type(placeable.getName) == "function" then
+        local pName = placeable:getName()
+        if type(pName) == "string" and pName ~= "" then
+            locationName = pName
+        end
+    end
+
+    return locationId, locationName
+end
+
+---Prepend callback for SellingStation.sellFillType: resolve the sold fillType (WHAT) AND the station's
+---location (WHERE) TOGETHER, and stash them as ONE pending context for the money credit that follows in the
+---same synchronous stack. Subject and location are two ORTHOGONAL dimensions captured at the same site
+---(self IS the station), folded into ONE setPendingContext because a second call would clobber the first
+---(TL-25). The signature mirrors sellFillType's params so fillTypeIndex is read positionally (4th incl.
+---self); sellingStation (self) is now USED (TL-25) to resolve the location. Server-authority is enforced
+---ONCE, at setPendingContext (g_server-guarded) - deliberately NO duplicate g_server guard here, so a
+---client-side prepend is a harmless read that no-ops at the setter. RAISE-FREE: every read is type()-guarded
+---(no pcall), because a raise in the prepend would prevent the real sale. The two dimensions degrade
+---INDEPENDENTLY: an unresolvable fillType (nil index, absent/methodless g_fillTypeManager, non-table desc)
+---leaves the subject nil WITHOUT dropping the location, and a placeable-less station leaves the location nil
+---without dropping the subject; a nil name/title/id nil-normalizes downstream. Past the farmId leak guard
+---the callback ALWAYS sets once (subject and/or location, possibly all-nil) -- an all-nil set is harmless:
+---changeFarmBalance consumes+clears on every authoritative call, so it behaves exactly like no set.
+---@param sellingStation table|nil the SellingStation instance (TL-25: read for location via resolveSellingStationLocation)
 ---@param farmId number|nil the selling farm's id
 ---@param fillDelta number|nil the amount sold (unused here; present to mirror the signature)
 ---@param fillTypeIndex number|nil the sold fillType's runtime index
 function RmTransactionLog.captureSellFillTypeContext(sellingStation, farmId, fillDelta, fillTypeIndex, ...)
     Log:trace("captureSellFillTypeContext: farmId=%s fillTypeIndex=%s",
         tostring(farmId), tostring(fillTypeIndex))
-    -- Leak guard: addMoney credits changeBalance for amount 0 (a zero-price sale is consumed normally),
-    -- but EARLY-RETURNS without changeBalance when farmId is 0 (spectator) or the farm is unknown. A
-    -- context set for such a sale would never be consumed and would leak onto the NEXT server
-    -- transaction, so skip when farmId is nil/0. (A nonzero-but-unknown farmId is a bounded,
-    -- self-healing residual: the next capture-hook sale overwrites the holder.)
+    -- Leak guard (SOLE early-return): addMoney credits changeBalance for amount 0 (a zero-price sale is
+    -- consumed normally), but EARLY-RETURNS without changeBalance when farmId is 0 (spectator) or the farm
+    -- is unknown. A context set for such a sale -- subject OR location -- would never be consumed and would
+    -- leak onto the NEXT server transaction, so skip when farmId is nil/0. (A nonzero-but-unknown farmId is
+    -- a bounded, self-healing residual: the next capture-hook sale overwrites the holder.)
     if farmId == nil or farmId == 0 then
         Log:trace("  skipped: nil/0 farmId (leak guard)")
         return
     end
-    if fillTypeIndex == nil then
-        Log:trace("  skipped: nil fillTypeIndex")
-        return
+
+    -- WHERE: resolve the station's location (raise-free, value snapshot). Orthogonal to the subject below.
+    local locationId, locationName = RmTransactionLog.resolveSellingStationLocation(sellingStation)
+
+    -- WHAT: resolve the sold fillType into three nil-degrading locals. Hardened type/function guards so a
+    -- truthy non-table manager, a non-function method, or a non-table desc nil-degrades WITHOUT raising and
+    -- WITHOUT dropping the location (NO early-return -- the two dimensions are independent). .name is the
+    -- stable UPPERCASE key ("BARLEY"); .title the localized snapshot ("Barley"); each nil-normalizes
+    -- independently downstream, so a desc missing either sets that field nil.
+    local subjectId, subjectName, subjectKind = nil, nil, nil
+    if fillTypeIndex ~= nil
+        and type(g_fillTypeManager) == "table"
+        and type(g_fillTypeManager.getFillTypeByIndex) == "function" then
+        local fillType = g_fillTypeManager:getFillTypeByIndex(fillTypeIndex)
+        if type(fillType) == "table" then
+            subjectId = fillType.name
+            subjectName = fillType.title
+            subjectKind = "fillType"
+        end
     end
-    if g_fillTypeManager == nil then
-        Log:trace("  skipped: g_fillTypeManager absent")
-        return
-    end
-    local fillType = g_fillTypeManager:getFillTypeByIndex(fillTypeIndex)
-    if type(fillType) ~= "table" then
-        Log:trace("  skipped: no fillType desc for index %s", tostring(fillTypeIndex))
-        return
-    end
-    -- .name is the stable UPPERCASE key ("BARLEY"); .title is the localized display snapshot ("Barley").
-    -- Each nil-normalizes independently downstream, so a desc missing either sets that field nil.
-    Log:trace("  set subject: id=%s name=%s kind=fillType",
-        tostring(fillType.name), tostring(fillType.title))
+
+    -- ONE merged set (past the leak guard, always once): subject and/or location, possibly all-nil.
+    Log:trace("  set context: subjectId=%s subjectName=%s subjectKind=%s locationId=%s locationName=%s",
+        tostring(subjectId), tostring(subjectName), tostring(subjectKind),
+        tostring(locationId), tostring(locationName))
     RmTransactionLog.setPendingContext({
-        subjectId = fillType.name,
-        subjectName = fillType.title,
-        subjectKind = "fillType",
+        subjectId = subjectId,
+        subjectName = subjectName,
+        subjectKind = subjectKind,
+        locationId = locationId,
+        locationName = locationName,
     })
 end
 
@@ -756,7 +830,8 @@ end
 -- / soldHandtools -> DIRECT path); the placeable BUY statistic constructionCost IS batchable (it is shared
 -- with landscaping), so that one path rides the TL-22/36 context-threaded batch and its flushed row carries
 -- the subject. Either way changeFarmBalance threads the consumed context onward, so no batcher change is in
--- scope. Location stays nil (E2.4); ProductionPoint direct-sell is a later ticket.
+-- scope. Location stays nil for shop buy/sell (shop purchases have no station self; TL-25's location capture
+-- covers selling-station sales only). ProductionPoint direct-sell is a later ticket (TL-28).
 -- ============================================================
 
 -- Per-target one-shot install guards (one per shop entry point): each is set true once its prepend is
@@ -870,8 +945,8 @@ function RmTransactionLog.captureSoldHandToolContext(event, ...)
 end
 
 ---Prepend callback for SellPlaceableEvent.run: capture the sold placeable via its store item
----(event.placeable.storeItem) -- NOT placeable:getName() (the usually-nil player custom name; a location
----concept deferred to E2.4). prependedFunction forwards the hooked args, so `event` is the SellPlaceableEvent
+---(event.placeable.storeItem) -- NOT placeable:getName() (the usually-nil player custom name; location for
+---shop sales is out of TL-25's selling-station scope). prependedFunction forwards the hooked args, so `event` is the SellPlaceableEvent
 ---instance. Empty-degrades (NO context, no raise) on a non-table event, a nil placeable (incl. the reply
 ---event), or a nil/absent storeItem. Also SKIPS a forFree sale (event.forFree): a free sale has no money
 ---change, so arming the subject would leak it onto the NEXT changeBalance (e.g. a landscaping
