@@ -1048,8 +1048,9 @@ function RmTransactionLog.changeFarmBalance(self, amount, moneyType, ...)
     -- logs, the self / amount / farmId guards, and getBalance -- so EVERY authoritative changeBalance
     -- clears the holder (even an early-returning, malformed, or batched one). This is the leak
     -- guarantee: a synchronously NESTED changeBalance (e.g. fired from within getBalance) finds the
-    -- holder already cleared, so nothing crosses to a later transaction. Only the DIRECT path below
-    -- threads these locals into logTransaction; a batchable outer forwards nothing (threading is TL-22).
+    -- holder already cleared, so nothing crosses to a later transaction. BOTH paths below thread these
+    -- locals onward (TL-22): the DIRECT path into logTransaction's record, the batchable path into
+    -- addToBatch (which sub-keys and stores them on the batch).
     local subjectId, locationId, locationName = RmTransactionLog.consumePendingContext()
     Log:trace("Farm balance changed with parameters:")
     Log:trace(RmLogging.functionParametersToString(self, amount, moneyType, ...))
@@ -1094,8 +1095,11 @@ function RmTransactionLog.changeFarmBalance(self, amount, moneyType, ...)
 
     -- Use batching system for batchable transactions, log others directly
     if RmTransactionBatcher.shouldBatch(moneyType.statistic) then
+        -- BATCHABLE path threads the consumed TL-19 context locals into the batch (TL-22): addToBatch
+        -- sub-keys on them so distinct subjects/locations never merge, and stores them on the batch so
+        -- the flushed aggregate carries them. logFunction (logTransaction) stays the last argument.
         RmTransactionBatcher.addToBatch(amount, self.farmId, moneyType, constant, currentBalance,
-            RmTransactionLog.logTransaction)
+            subjectId, locationId, locationName, RmTransactionLog.logTransaction)
     else
         -- DIRECT path threads the consumed TL-19 context locals into a record (TL-35). Named fields
         -- make positional misalignment impossible, so no explicit `comment` placeholder is needed --
