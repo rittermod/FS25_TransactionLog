@@ -37,8 +37,8 @@ RmTransactionLog.previousCalendarYear = nil  -- Format: "YYYY"
 -- into BOTH the DIRECT logTransaction record AND (TL-22) the batchable addToBatch call. Storage is FIVE
 -- scalar module fields behind a RECORD-shaped API (TL-36 decision 2a): setPendingContext(context) reads
 -- context.<field>, consumePendingContext() RETURNS a record + clears the scalars. Default nil; set on the
--- authority only (setPendingContext is g_server-guarded). SellingStation sales set the subject via the
--- TL-26 capture hook; the remaining capture sites are TL-24/25/27/28.
+-- authority only (setPendingContext is g_server-guarded). SellingStation sales (TL-26) and animal trades
+-- (TL-23) set the subject via capture hooks; the remaining capture sites are TL-24/25/27/28.
 RmTransactionLog.pendingSubjectId = nil    -- best-effort key: fillType/animal name, store-item xmlFilename, or nil (verbatim)
 RmTransactionLog.pendingSubjectName = nil  -- always-set display snapshot (capture-hook contract; verbatim)
 RmTransactionLog.pendingSubjectKind = nil  -- open-vocab kind: fillType/animal/storeItem seeds (verbatim)
@@ -190,9 +190,9 @@ end
 ---@field constant string|nil derived MoneyType constant name (e.g. "VEHICLE_REPAIR")
 ---@field currentFarmBalance number|nil farm balance after the transaction (nil -> 0)
 ---@field comment string|nil optional comment for the transaction (nil -> "")
----@field subjectId string|nil enrichment WHAT: best-effort stable key (fillType/animal name, store-item xmlFilename, or nil) (set for SellingStation sales since TL-26; other capture sites TL-24/25/27/28)
----@field subjectName string|nil enrichment WHAT: always-set resolved display snapshot (capture-hook contract; set for SellingStation sales since TL-26; other sites TL-24/25/27/28)
----@field subjectKind string|nil enrichment WHAT: open-vocab kind discriminator (fillType/animal/storeItem seeds; set for SellingStation sales since TL-26; other sites TL-24/25/27/28)
+---@field subjectId string|nil enrichment WHAT: best-effort stable key (fillType/animal name, store-item xmlFilename, or nil) (set for SellingStation sales since TL-26 and animal trades since TL-23; other capture sites TL-24/25/27/28)
+---@field subjectName string|nil enrichment WHAT: always-set resolved display snapshot (capture-hook contract; set for SellingStation sales since TL-26 and animal trades since TL-23; other sites TL-24/25/27/28)
+---@field subjectKind string|nil enrichment WHAT: open-vocab kind discriminator (fillType/animal/storeItem seeds; set for SellingStation sales since TL-26 and animal trades since TL-23; other sites TL-24/25/27/28)
 ---@field locationId string|nil enrichment WHERE: placeable uniqueId string (nil until location capture lands, E2.4)
 ---@field locationName string|nil enrichment WHERE: placeable display-name snapshot (nil until location capture lands, E2.4)
 
@@ -278,8 +278,9 @@ function RmTransactionLog.logTransaction(record)
     -- Empty customEnv/constant/subjectId/subjectName/subjectKind/locationId/locationName normalize to
     -- nil (never concat/getText onto nil), each INDEPENDENTLY. TL-18/TL-36 plumb subject/location as
     -- additive nil-normalized fields; TL-19 consumes the pending-context holder in changeFarmBalance and
-    -- threads it here on the DIRECT path. SellingStation sales set the subject via the TL-26 capture hook
-    -- (other capture sites TL-24/25/27/28); a txn with no captured subject records these nil. subjectId is
+    -- threads it here on the DIRECT path. SellingStation sales (TL-26) and animal trades (TL-23) set the
+    -- subject via capture hooks (animal trades take THIS direct path -- newAnimalsCost/soldAnimals are
+    -- non-batchable; other capture sites TL-24/25/27/28); a txn with no captured subject records these nil. subjectId is
     -- a best-effort key; subjectName is the always-set display
     -- snapshot (a capture-hook contract, not enforced here); subjectKind is an open-vocab discriminator.
     local transaction = {
@@ -472,8 +473,8 @@ end
 -- ============================================================
 -- Pending context (TL-19): synchronous set/consume-once channel for transaction enrichment.
 -- A call-site prepend-hook stashes a subject/location here IMMEDIATELY before the intended addMoney;
--- changeFarmBalance consumes it once at entry. SellingStation sales set it via the TL-26 hook; the
--- remaining capture sites are TL-24/25/27/28.
+-- changeFarmBalance consumes it once at entry. SellingStation sales (TL-26) and animal trades (TL-23) set
+-- it via capture hooks; the remaining capture sites are TL-24/25/27/28.
 -- ============================================================
 
 ---Stash the subject (WHAT) + location (WHERE) for the NEXT authoritative changeBalance. Takes ONE
@@ -598,6 +599,152 @@ function RmTransactionLog.installSellingStationCaptureHook()
     RmTransactionLog.sellFillTypeHookInstalled = true
     Log:debug("Installed SellingStation.sellFillType subject-capture prepend")
     return true
+end
+
+-- ============================================================
+-- Animal buy/sell subject capture (TL-23): the mod's SECOND prepend site. Reads the traded animal's
+-- subType off AnimalBuyEvent.run / AnimalSellEvent.run BEFORE the engine credits the money, resolves it to
+-- a subject {subjectId=subType.name, subjectName=fillType.title, subjectKind="animal"}, and stashes it via
+-- setPendingContext so the already-appended changeFarmBalance consumes it and the (non-batchable,
+-- DIRECT-path) newAnimalsCost/soldAnimals row carries the animal. Location stays nil (a later ticket).
+-- ============================================================
+
+-- Per-target one-shot install guards: each is set true once its prepend is wrapped, so a second install
+-- call never stacks a duplicate prepend, yet a target absent at first call is still wrapped on a later call
+-- (NO permanent lockout). One independent flag per target (AnimalBuyEvent.run, AnimalSellEvent.run).
+RmTransactionLog.animalBuyHookInstalled = false
+RmTransactionLog.animalSellHookInstalled = false
+
+---Resolve an animal subType index to the enrichment subject record. PINNED contract: return a
+---{subjectId, subjectName, subjectKind="animal"} record whenever a subType TABLE resolves (subjectId and
+---subjectName may EACH be nil independently); return nil ONLY when no subType resolves. subjectId is the
+---animal's stable UPPERCASE key (subType.name, e.g. "COW"); subjectName is the localized fillType title
+---(e.g. "Cow"/"Kuh") via g_fillTypeManager; subjectKind is the exact TL-36 camelCase seed "animal". A
+---record with kind + two nils is a VALID degrade (display falls back subjectId -> "--").
+---@param subTypeIndex number|nil the animal subType's runtime index
+---@return table|nil context {subjectId, subjectName, subjectKind="animal"} or nil when no subType resolves
+function RmTransactionLog.resolveAnimalSubjectContext(subTypeIndex)
+    if subTypeIndex == nil then
+        return nil
+    end
+    if g_currentMission == nil or g_currentMission.animalSystem == nil then
+        return nil
+    end
+    local subType = g_currentMission.animalSystem:getSubTypeByIndex(subTypeIndex)
+    if type(subType) ~= "table" then
+        return nil
+    end
+    -- subjectId: the animal's stable UPPERCASE key; nil/"" -> nil (normalized independently of subjectName).
+    local subjectId = (subType.name ~= nil and subType.name ~= "") and subType.name or nil
+    -- subjectName: the fillType's localized title, resolved best-effort; nil/"" -> nil INDEPENDENTLY of
+    -- subjectId, so an absent g_fillTypeManager or a title-less desc leaves a kind-only record.
+    local subjectName = nil
+    if g_fillTypeManager ~= nil then
+        local fillType = g_fillTypeManager:getFillTypeByIndex(subType.fillTypeIndex)
+        if type(fillType) == "table" and fillType.title ~= nil and fillType.title ~= "" then
+            subjectName = fillType.title
+        end
+    end
+    return {
+        subjectId = subjectId,
+        subjectName = subjectName,
+        subjectKind = "animal",
+    }
+end
+
+---Prepend callback for AnimalBuyEvent.run: resolve the bought animal's subType (event.subTypeIndex) and
+---stash it as the pending subject for the money credit that follows in the same synchronous stack.
+---Utils.prependedFunction forwards the hooked call's args to this callback, so `event` is the
+---AnimalBuyEvent instance (the hooked self) and `connection` is the passed-through connection.
+---Empty-degrades (sets NO context, never raises) on a non-table event or an unresolvable subtype (incl.
+---the server-to-client REPLY event, which
+---carries only errorCode -> nil subTypeIndex). Server-authority is enforced ONCE at setPendingContext
+---(g_server-guarded) - deliberately NO duplicate g_server guard here (TL-36 single-guard-point contract).
+---On a server-REJECTED trade (the base validate fails AFTER this prepend set context) run returns without
+---addMoney, so the set subject leaks onto the NEXT authoritative changeBalance - an ACCEPTED, bounded,
+---self-healing residual (farmId is not a run param, so TL-26's farmId guard is unavailable; see the spec
+---Design Notes). Do NOT "fix" this by hooking addAnimals/changeNumAnimals - those fire in non-monetary
+---contexts (loading/birth/transport) and leak WORSE.
+---@param event table the AnimalBuyEvent instance (the hooked self, forwarded by prependedFunction)
+---@param connection table|nil the network connection (unused; forwarded by prependedFunction)
+function RmTransactionLog.captureAnimalBuyContext(event, connection, ...)
+    if type(event) ~= "table" then
+        return
+    end
+    Log:trace("captureAnimalBuyContext: subTypeIndex=%s", tostring(event.subTypeIndex))
+    local ctx = RmTransactionLog.resolveAnimalSubjectContext(event.subTypeIndex)
+    if ctx ~= nil then
+        RmTransactionLog.setPendingContext(ctx)
+    end
+end
+
+---Prepend callback for AnimalSellEvent.run: resolve the sold animal via its cluster
+---(event.object:getClusterById(event.clusterId).subTypeIndex) and stash it as the pending subject for the
+---money credit. Utils.prependedFunction forwards the hooked call's args, so `event` is the AnimalSellEvent
+---instance (the hooked self). Empty-degrades (NO context, no raise) on a
+---non-table event/object, a missing getClusterById, a nil clusterId, a nil/non-table cluster, or a
+---non-number subtype (incl. the reply event, whose object is nil). getClusterById returns nil (not a
+---raise) for an unknown/stale clusterId, so a sold-out-from-under race degrades cleanly via the
+---nil-cluster guard; and because the base sell already resolves the cluster before crediting, this prepend
+---adds NO new crash path even for a malformed input. The same ACCEPTED failed/raced-trade subject leak as
+---the buy callback applies (bounded + self-healing; see the buy docstring + spec Design Notes). No
+---duplicate g_server guard (authority is at setPendingContext).
+---@param event table the AnimalSellEvent instance (the hooked self, forwarded by prependedFunction)
+---@param connection table|nil the network connection (unused; forwarded by prependedFunction)
+function RmTransactionLog.captureAnimalSellContext(event, connection, ...)
+    if type(event) ~= "table" then
+        return
+    end
+    if type(event.object) ~= "table" or type(event.object.getClusterById) ~= "function"
+        or event.clusterId == nil then
+        return
+    end
+    local cluster = event.object:getClusterById(event.clusterId)
+    if type(cluster) ~= "table" then
+        return
+    end
+    local subTypeIndex = cluster.subTypeIndex
+    if type(subTypeIndex) ~= "number" then
+        return
+    end
+    Log:trace("captureAnimalSellContext: subTypeIndex=%s", tostring(subTypeIndex))
+    local ctx = RmTransactionLog.resolveAnimalSubjectContext(subTypeIndex)
+    if ctx ~= nil then
+        RmTransactionLog.setPendingContext(ctx)
+    end
+end
+
+---Install the AnimalBuyEvent.run / AnimalSellEvent.run prepends ONCE, at file scope. Idempotent +
+---PER-TARGET presence-guarded: each target is wrapped only when its event class + run method exist AND that
+---target's flag is unset, then its flag is set. A re-call wraps any not-yet-wrapped present target (a target
+---absent at first call but present later is still wrapped - NO permanent lockout). Logs a WARNING per absent
+---target (empty-degrade: the mod still loads; that trade path just records a nil subject).
+---@return boolean installedThisCall true if this call wrapped at least one prepend, false otherwise
+function RmTransactionLog.installAnimalTradeCaptureHooks()
+    local installedAny = false
+    if not RmTransactionLog.animalBuyHookInstalled then
+        if AnimalBuyEvent ~= nil and AnimalBuyEvent.run ~= nil then
+            AnimalBuyEvent.run = Utils.prependedFunction(
+                AnimalBuyEvent.run, RmTransactionLog.captureAnimalBuyContext)
+            RmTransactionLog.animalBuyHookInstalled = true
+            installedAny = true
+            Log:debug("Installed AnimalBuyEvent.run subject-capture prepend")
+        else
+            Log:warning("AnimalBuyEvent.run unavailable; bought-animal subject capture disabled")
+        end
+    end
+    if not RmTransactionLog.animalSellHookInstalled then
+        if AnimalSellEvent ~= nil and AnimalSellEvent.run ~= nil then
+            AnimalSellEvent.run = Utils.prependedFunction(
+                AnimalSellEvent.run, RmTransactionLog.captureAnimalSellContext)
+            RmTransactionLog.animalSellHookInstalled = true
+            installedAny = true
+            Log:debug("Installed AnimalSellEvent.run subject-capture prepend")
+        else
+            Log:warning("AnimalSellEvent.run unavailable; sold-animal subject capture disabled")
+        end
+    end
+    return installedAny
 end
 
 -- ============================================================
@@ -1556,6 +1703,11 @@ Farm.changeBalance = Utils.appendedFunction(Farm.changeBalance, RmTransactionLog
 -- (NOT in loadMap, which re-runs per mission and would stack duplicate prepends -- the once-per-process
 -- class-method-hook rule). This is the mod's first prepend; all prior hooks are appendedFunction.
 RmTransactionLog.installSellingStationCaptureHook()
+
+-- Animal buy/sell subject capture (TL-23): install the two animal-trade prepends once, here at FILE scope
+-- (same once-per-process rule as the TL-26 installer above -- loadMap would stack duplicate prepends). This
+-- is the mod's SECOND prepend site, mirroring the SellingStation installer.
+RmTransactionLog.installAnimalTradeCaptureHooks()
 
 -- Join delivery (TL-11): append the snapshot send onto FSBaseMission.sendInitialClientState at FILE
 -- scope (NOT in loadMap). A class-method hook must be appended ONCE per process; loadMap re-runs per
