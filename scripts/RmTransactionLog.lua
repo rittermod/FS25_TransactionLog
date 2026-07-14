@@ -30,13 +30,18 @@ RmTransactionLog.previousDate = nil          -- Format: "YYYY-MM-DD"
 RmTransactionLog.previousCalendarMonth = nil -- Format: "YYYY-MM"
 RmTransactionLog.previousCalendarYear = nil  -- Format: "YYYY"
 
--- Pending-context holder (TL-19): a synchronous set/consume-once channel that hands a subject (WHAT)
--- and a location (WHERE) from a call-site into the universal Farm.changeBalance sink, which sees only
--- farm / amount / moneyType. A call-site prepend-hook sets these IMMEDIATELY before the intended
--- addMoney; changeFarmBalance consumes them once at entry (clearing all three) and threads them into
--- the DIRECT logTransaction call. Default nil; set on the authority only (setPendingContext is
--- g_server-guarded). No caller sets them yet -- the real capture hooks are TL-22..25.
-RmTransactionLog.pendingSubjectId = nil    -- stable fillType / animal NAME key (verbatim)
+-- Pending-context holder (TL-19; extended TL-36): a synchronous set/consume-once channel that hands a
+-- subject (WHAT) and a location (WHERE) from a call-site into the universal Farm.changeBalance sink,
+-- which sees only farm / amount / moneyType. A call-site prepend-hook sets these IMMEDIATELY before the
+-- intended addMoney; changeFarmBalance consumes them once at entry (clearing all FIVE) and threads them
+-- into BOTH the DIRECT logTransaction record AND (TL-22) the batchable addToBatch call. Storage is FIVE
+-- scalar module fields behind a RECORD-shaped API (TL-36 decision 2a): setPendingContext(context) reads
+-- context.<field>, consumePendingContext() RETURNS a record + clears the scalars. Default nil; set on the
+-- authority only (setPendingContext is g_server-guarded). No caller sets them yet -- the real capture
+-- hooks are TL-23..28.
+RmTransactionLog.pendingSubjectId = nil    -- best-effort key: fillType/animal name, store-item xmlFilename, or nil (verbatim)
+RmTransactionLog.pendingSubjectName = nil  -- always-set display snapshot (capture-hook contract; verbatim)
+RmTransactionLog.pendingSubjectKind = nil  -- open-vocab kind: fillType/animal/storeItem seeds (verbatim)
 RmTransactionLog.pendingLocationId = nil   -- placeable uniqueId string (verbatim)
 RmTransactionLog.pendingLocationName = nil -- placeable display-name snapshot (verbatim)
 
@@ -198,9 +203,11 @@ end
 ---@field constant string|nil derived MoneyType constant name (e.g. "VEHICLE_REPAIR")
 ---@field currentFarmBalance number|nil farm balance after the transaction (nil -> 0)
 ---@field comment string|nil optional comment for the transaction (nil -> "")
----@field subjectId string|nil enrichment WHAT: stable fillType/animal NAME key (nil until wired in TL-22..25)
----@field locationId string|nil enrichment WHERE: placeable uniqueId string (nil until wired in TL-22..25)
----@field locationName string|nil enrichment WHERE: placeable display-name snapshot (nil until wired in TL-22..25)
+---@field subjectId string|nil enrichment WHAT: best-effort stable key (fillType/animal name, store-item xmlFilename, or nil) (nil until wired in TL-23..28)
+---@field subjectName string|nil enrichment WHAT: always-set resolved display snapshot (capture-hook contract; nil until TL-23..28)
+---@field subjectKind string|nil enrichment WHAT: open-vocab kind discriminator (fillType/animal/storeItem seeds; nil until TL-23..28)
+---@field locationId string|nil enrichment WHERE: placeable uniqueId string (nil until wired in TL-23..28)
+---@field locationName string|nil enrichment WHERE: placeable display-name snapshot (nil until wired in TL-23..28)
 
 ---Logs a single transaction to the transaction log.
 ---Stores the money-type snapshot RAW (i18n keys + identity), never resolved text -
@@ -228,6 +235,8 @@ function RmTransactionLog.logTransaction(record)
     local currentFarmBalance = record.currentFarmBalance
     local comment = record.comment
     local subjectId = record.subjectId
+    local subjectName = record.subjectName
+    local subjectKind = record.subjectKind
     local locationId = record.locationId
     local locationName = record.locationName
 
@@ -279,10 +288,12 @@ function RmTransactionLog.logTransaction(record)
     local id = RmTransactionLog.nextTransactionId
     RmTransactionLog.nextTransactionId = id + 1
     -- Store keys/identity RAW; resolve to display text only in the GUI/exporter.
-    -- Empty customEnv/constant/subjectId/locationId/locationName normalize to nil (never
-    -- concat/getText onto nil). TL-18 plumbs subject/location as additive nil-normalized fields;
-    -- TL-19 consumes the pending-context holder in changeFarmBalance and threads it here on the DIRECT
-    -- path, but no real call-site sets context yet -- that is TL-22..25, so these stay nil in play.
+    -- Empty customEnv/constant/subjectId/subjectName/subjectKind/locationId/locationName normalize to
+    -- nil (never concat/getText onto nil), each INDEPENDENTLY. TL-18/TL-36 plumb subject/location as
+    -- additive nil-normalized fields; TL-19 consumes the pending-context holder in changeFarmBalance and
+    -- threads it here on the DIRECT path, but no real call-site sets context yet -- that is TL-23..28, so
+    -- these stay nil in play. subjectId is a best-effort key; subjectName is the always-set display
+    -- snapshot (a capture-hook contract, not enforced here); subjectKind is an open-vocab discriminator.
     local transaction = {
         id = id,
         realDateTime = realDateTime,
@@ -296,6 +307,8 @@ function RmTransactionLog.logTransaction(record)
         currentFarmBalance = currentFarmBalance or 0,
         comment = comment or "",
         subjectId = (subjectId ~= "" and subjectId) or nil,
+        subjectName = (subjectName ~= "" and subjectName) or nil,
+        subjectKind = (subjectKind ~= "" and subjectKind) or nil,
         locationId = (locationId ~= "" and locationId) or nil,
         locationName = (locationName ~= "" and locationName) or nil,
     }
@@ -474,41 +487,49 @@ end
 -- changeFarmBalance consumes it once at entry. Mechanism only -- no call-site hooks yet (TL-22..25).
 -- ============================================================
 
----Stash the subject (WHAT) + location (WHERE) for the NEXT authoritative changeBalance. Each arg is
----optional (absent -> nil). AUTHORITY-GUARDED: a no-op on a pure client (g_server == nil) so a stray or
----future client-side set can never seed stale context -- capture is server-authoritative, and a client's
----changeFarmBalance no-ops at its own g_server guard anyway. Grammar-agnostic: stores whatever strings are
----passed VERBATIM (the "" -> nil normalization + any grammar live at the capture hooks / logTransaction,
----not here). The real contract for the capture hooks: call this synchronously right before the addMoney,
----because a single global holder is safe ONLY within one synchronous set->consume stack (Design Notes F6).
----@param subjectId string|nil stable fillType / animal NAME key
----@param locationId string|nil placeable uniqueId string
----@param locationName string|nil placeable display-name snapshot
-function RmTransactionLog.setPendingContext(subjectId, locationId, locationName)
+---Stash the subject (WHAT) + location (WHERE) for the NEXT authoritative changeBalance. Takes ONE
+---`context` record whose fields are each optional (absent -> nil). NIL-GUARDED: a nil or partial `context`
+---is treated as an empty context (every field reads back nil) and NEVER raises -- indexing `context or {}`.
+---AUTHORITY-GUARDED: a no-op on a pure client (g_server == nil) so a stray or future client-side set can
+---never seed stale context -- capture is server-authoritative, and a client's changeFarmBalance no-ops at
+---its own g_server guard anyway. Grammar-agnostic: stores whatever strings are passed VERBATIM (the "" ->
+---nil normalization + any grammar live at the capture hooks / logTransaction, not here). The real contract
+---for the capture hooks: call this synchronously right before the addMoney, because a single global holder
+---is safe ONLY within one synchronous set->consume stack (Design Notes F6).
+---@param context table|nil a record {subjectId, subjectName, subjectKind, locationId, locationName}; any field optional
+function RmTransactionLog.setPendingContext(context)
     if g_server == nil then return end
-    RmTransactionLog.pendingSubjectId = subjectId
-    RmTransactionLog.pendingLocationId = locationId
-    RmTransactionLog.pendingLocationName = locationName
+    context = context or {}
+    RmTransactionLog.pendingSubjectId = context.subjectId
+    RmTransactionLog.pendingSubjectName = context.subjectName
+    RmTransactionLog.pendingSubjectKind = context.subjectKind
+    RmTransactionLog.pendingLocationId = context.locationId
+    RmTransactionLog.pendingLocationName = context.locationName
 end
 
----Atomically read-and-clear the pending context. Returns subjectId, locationId, locationName IN THAT
----ORDER (matching setPendingContext and logTransaction's trailing params) and resets all three fields to
----nil in the one call. A second consume before the next set returns all-nil -- intentional consume-once,
----not an error. This is the single clear point: changeFarmBalance calls it once at entry so EVERY
----authoritative changeBalance clears the holder, which is the leak guarantee (context can never cross to
----a LATER unrelated transaction). NOT called from logTransaction -- that runs again at batch flush, when
----the holder is unrelated; the flushed row gets nil via logTransaction's explicit args.
----@return string|nil subjectId
----@return string|nil locationId
----@return string|nil locationName
+---Atomically read-and-clear the pending context. RETURNS a record
+---`{subjectId, subjectName, subjectKind, locationId, locationName}` and resets all five scalar fields to
+---nil in the one call. A second consume before the next set returns a record whose fields are all-nil --
+---intentional consume-once, not an error. This is the single clear point: changeFarmBalance binds it once
+---at entry (`local ctx = consumePendingContext()`) so EVERY authoritative changeBalance clears the holder,
+---which is the leak guarantee (context can never cross to a LATER unrelated transaction). NOT called from
+---logTransaction -- that runs again at batch flush, when the holder is unrelated; the flushed row gets nil
+---via logTransaction's explicit args.
+---@return table context a record {subjectId, subjectName, subjectKind, locationId, locationName} (fields may be nil)
 function RmTransactionLog.consumePendingContext()
-    local subjectId = RmTransactionLog.pendingSubjectId
-    local locationId = RmTransactionLog.pendingLocationId
-    local locationName = RmTransactionLog.pendingLocationName
+    local context = {
+        subjectId = RmTransactionLog.pendingSubjectId,
+        subjectName = RmTransactionLog.pendingSubjectName,
+        subjectKind = RmTransactionLog.pendingSubjectKind,
+        locationId = RmTransactionLog.pendingLocationId,
+        locationName = RmTransactionLog.pendingLocationName,
+    }
     RmTransactionLog.pendingSubjectId = nil
+    RmTransactionLog.pendingSubjectName = nil
+    RmTransactionLog.pendingSubjectKind = nil
     RmTransactionLog.pendingLocationId = nil
     RmTransactionLog.pendingLocationName = nil
-    return subjectId, locationId, locationName
+    return context
 end
 
 -- ============================================================
@@ -1048,10 +1069,10 @@ function RmTransactionLog.changeFarmBalance(self, amount, moneyType, ...)
     -- logs, the self / amount / farmId guards, and getBalance -- so EVERY authoritative changeBalance
     -- clears the holder (even an early-returning, malformed, or batched one). This is the leak
     -- guarantee: a synchronously NESTED changeBalance (e.g. fired from within getBalance) finds the
-    -- holder already cleared, so nothing crosses to a later transaction. BOTH paths below thread these
-    -- locals onward (TL-22): the DIRECT path into logTransaction's record, the batchable path into
-    -- addToBatch (which sub-keys and stores them on the batch).
-    local subjectId, locationId, locationName = RmTransactionLog.consumePendingContext()
+    -- holder already cleared, so nothing crosses to a later transaction. Binds the whole 5-field record
+    -- (TL-36) and threads ctx.<field> onward -- NOT a positional destructure: the DIRECT path into
+    -- logTransaction's record, the batchable path into addToBatch (TL-22; sub-keys + stores them).
+    local ctx = RmTransactionLog.consumePendingContext()
     Log:trace("Farm balance changed with parameters:")
     Log:trace(RmLogging.functionParametersToString(self, amount, moneyType, ...))
 
@@ -1095,15 +1116,16 @@ function RmTransactionLog.changeFarmBalance(self, amount, moneyType, ...)
 
     -- Use batching system for batchable transactions, log others directly
     if RmTransactionBatcher.shouldBatch(moneyType.statistic) then
-        -- BATCHABLE path threads the consumed TL-19 context locals into the batch (TL-22): addToBatch
-        -- sub-keys on them so distinct subjects/locations never merge, and stores them on the batch so
-        -- the flushed aggregate carries them. logFunction (logTransaction) stays the last argument.
+        -- BATCHABLE path threads the consumed context record into the batch (TL-22/TL-36): addToBatch
+        -- takes ONE context record, sub-keys on subjectId+location so distinct subjects/locations never
+        -- merge, and stores the 5 fields on the batch so the flushed aggregate carries them. logFunction
+        -- (logTransaction) stays the last argument.
         RmTransactionBatcher.addToBatch(amount, self.farmId, moneyType, constant, currentBalance,
-            subjectId, locationId, locationName, RmTransactionLog.logTransaction)
+            ctx, RmTransactionLog.logTransaction)
     else
-        -- DIRECT path threads the consumed TL-19 context locals into a record (TL-35). Named fields
-        -- make positional misalignment impossible, so no explicit `comment` placeholder is needed --
-        -- `comment` is simply omitted and defaults to "" in logTransaction (TL-22 threads batch context).
+        -- DIRECT path threads the consumed context record fields (TL-36) into a logTransaction record
+        -- (TL-35). Named fields make positional misalignment impossible, so no explicit `comment`
+        -- placeholder is needed -- `comment` is simply omitted and defaults to "" in logTransaction.
         RmTransactionLog.logTransaction({
             amount = amount,
             farmId = self.farmId,
@@ -1112,9 +1134,11 @@ function RmTransactionLog.changeFarmBalance(self, amount, moneyType, ...)
             customEnv = moneyType.customEnv,
             constant = constant,
             currentFarmBalance = currentBalance,
-            subjectId = subjectId,
-            locationId = locationId,
-            locationName = locationName,
+            subjectId = ctx.subjectId,
+            subjectName = ctx.subjectName,
+            subjectKind = ctx.subjectKind,
+            locationId = ctx.locationId,
+            locationName = ctx.locationName,
         })
     end
 end
@@ -1203,9 +1227,12 @@ function RmTransactionLog.saveToXmlFile(self)
         setXMLString(xmlFile, transactionKey .. "#constant", transaction.constant or "")
         setXMLFloat(xmlFile, transactionKey .. "#currentFarmBalance", transaction.currentFarmBalance or 0)
         setXMLString(xmlFile, transactionKey .. "#comment", transaction.comment or "")
-        -- Additive enrichment attrs (TL-18): nil -> "". No schemaVersion bump (stays 2), same
-        -- additive precedent as the TL-7 `#id`. A pre-enrichment save simply lacks them.
+        -- Additive enrichment attrs (TL-18/TL-36): nil -> "". No schemaVersion bump (stays 2), same
+        -- additive precedent as the TL-7 `#id`. Name-addressed, so order is irrelevant; a pre-enrichment
+        -- save simply lacks them and each loads back as nil INDEPENDENTLY.
         setXMLString(xmlFile, transactionKey .. "#subjectId", transaction.subjectId or "")
+        setXMLString(xmlFile, transactionKey .. "#subjectName", transaction.subjectName or "")
+        setXMLString(xmlFile, transactionKey .. "#subjectKind", transaction.subjectKind or "")
         setXMLString(xmlFile, transactionKey .. "#locationId", transaction.locationId or "")
         setXMLString(xmlFile, transactionKey .. "#locationName", transaction.locationName or "")
         i = i + 1
@@ -1307,10 +1334,12 @@ function RmTransactionLog.loadFromXMLFile()
         else
             local customEnv = getXMLString(xmlFile, transactionKey .. "#customEnv")
             local constant = getXMLString(xmlFile, transactionKey .. "#constant")
-            -- Additive enrichment attrs (TL-18). getXMLString returns nil for an absent attr, so use
-            -- the nil-guarded three-part form; each normalizes INDEPENDENTLY (no cross-field coupling)
-            -- and a pre-enrichment v2 save (attrs absent) loads all three as nil.
+            -- Additive enrichment attrs (TL-18/TL-36). getXMLString returns nil for an absent attr, so
+            -- use the nil-guarded three-part form; each normalizes INDEPENDENTLY (no cross-field coupling)
+            -- and a pre-enrichment v2 save (attrs absent) loads all five as nil.
             local subjectId = getXMLString(xmlFile, transactionKey .. "#subjectId")
+            local subjectName = getXMLString(xmlFile, transactionKey .. "#subjectName")
+            local subjectKind = getXMLString(xmlFile, transactionKey .. "#subjectKind")
             local locationId = getXMLString(xmlFile, transactionKey .. "#locationId")
             local locationName = getXMLString(xmlFile, transactionKey .. "#locationName")
             table.insert(rows, {
@@ -1327,6 +1356,8 @@ function RmTransactionLog.loadFromXMLFile()
                 currentFarmBalance = getXMLFloat(xmlFile, transactionKey .. "#currentFarmBalance") or 0,
                 comment = getXMLString(xmlFile, transactionKey .. "#comment") or "",
                 subjectId = (subjectId ~= nil and subjectId ~= "" and subjectId) or nil,
+                subjectName = (subjectName ~= nil and subjectName ~= "" and subjectName) or nil,
+                subjectKind = (subjectKind ~= nil and subjectKind ~= "" and subjectKind) or nil,
                 locationId = (locationId ~= nil and locationId ~= "" and locationId) or nil,
                 locationName = (locationName ~= nil and locationName ~= "" and locationName) or nil,
             })

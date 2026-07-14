@@ -107,30 +107,35 @@ function RmTransactionBatcher.createBatchKey(farmId, moneyTypeId, subjectId, loc
     return seg(farmId) .. seg(moneyTypeId) .. seg(subjectId) .. seg(loc)
 end
 
----Adds a transaction to the appropriate batch for later processing. Subject/location context (TL-22)
----is threaded from changeFarmBalance's consumed pending-context locals and BOTH keys the batch (via
----createBatchKey) AND is stored on the batch struct - so every member of a batch shares one
----subject/location and the flushed aggregate describes them faithfully. The three enrichment params sit
----BEFORE logFunction (which stays last). In normal play all three are nil (no capture hook yet -
----TL-26..28), so the key degrades to the pre-TL-22 farm+money-type grouping and batching is unchanged.
+---Adds a transaction to the appropriate batch for later processing. Subject/location context
+---(TL-22/TL-36) is threaded from changeFarmBalance's consumed pending-context RECORD and BOTH keys the
+---batch (via createBatchKey, on subjectId+location only) AND is stored on the batch struct - so every
+---member of a batch shares one subject/location and the flushed aggregate describes them faithfully. The
+---context record (TL-36 seam change: ONE record replaces the former 3 loose subjectId/locationId/
+---locationName params) sits BEFORE logFunction (which stays last). subjectName/subjectKind ride the struct
+---(carry-not-key, like locationName), set once at batch init (first-writer-wins on divergence);
+---createBatchKey is UNCHANGED. In normal play all five fields are nil (no capture hook yet - TL-23..28),
+---so the key degrades to the pre-TL-22 farm+money-type grouping and batching is unchanged.
 ---@param amount number transaction amount
 ---@param farmId number farm ID
 ---@param moneyType table money type (carries id/title/statistic/customEnv)
 ---@param constant string|nil derived MoneyType constant name
 ---@param currentFarmBalance number current farm balance
----@param subjectId string|nil enrichment WHAT: stable fillType/animal name key (nil until TL-26..28)
----@param locationId string|nil enrichment WHERE: placeable uniqueId (nil for a not-yet-saved placeable)
----@param locationName string|nil enrichment WHERE: placeable display-name snapshot
+---@param context table|nil enrichment record {subjectId, subjectName, subjectKind, locationId, locationName} (any field nil until TL-23..28)
 ---@param logFunction function function to call when batch is flushed (kept LAST)
 function RmTransactionBatcher.addToBatch(amount, farmId, moneyType, constant, currentFarmBalance,
-                                         subjectId, locationId, locationName, logFunction)
-    -- Normalize each enrichment value ("" -> nil) ONCE, up front, so the KEY, the stored batch struct,
-    -- and the flushed record all agree with logTransaction's row-level (x ~= "" and x) or nil contract.
-    -- Without this the struct would keep a raw "" that createBatchKey already treated as "no value", and
-    -- flushBatch would forward "" to a collector-style logFunction while the direct path yields nil.
-    subjectId = (subjectId ~= nil and subjectId ~= "") and subjectId or nil
-    locationId = (locationId ~= nil and locationId ~= "") and locationId or nil
-    locationName = (locationName ~= nil and locationName ~= "") and locationName or nil
+                                         context, logFunction)
+    -- Unpack + normalize each enrichment value ("" -> nil) ONCE, up front, so the KEY, the stored batch
+    -- struct, and the flushed record all agree with logTransaction's row-level (x ~= "" and x) or nil
+    -- contract. A nil/partial context reads every field as nil. Without this the struct would keep a raw ""
+    -- that createBatchKey already treated as "no value", and flushBatch would forward "" to a
+    -- collector-style logFunction while the direct path yields nil.
+    context = context or {}
+    local subjectId = (context.subjectId ~= nil and context.subjectId ~= "") and context.subjectId or nil
+    local subjectName = (context.subjectName ~= nil and context.subjectName ~= "") and context.subjectName or nil
+    local subjectKind = (context.subjectKind ~= nil and context.subjectKind ~= "") and context.subjectKind or nil
+    local locationId = (context.locationId ~= nil and context.locationId ~= "") and context.locationId or nil
+    local locationName = (context.locationName ~= nil and context.locationName ~= "") and context.locationName or nil
 
     local batchKey = RmTransactionBatcher.createBatchKey(farmId, moneyType.id, subjectId,
         locationId, locationName)
@@ -161,6 +166,8 @@ function RmTransactionBatcher.addToBatch(amount, farmId, moneyType, constant, cu
             customEnv = moneyType.customEnv,
             constant = constant,
             subjectId = subjectId,
+            subjectName = subjectName,
+            subjectKind = subjectKind,
             locationId = locationId,
             locationName = locationName,
             lastBalance = currentFarmBalance,
@@ -186,6 +193,8 @@ function RmTransactionBatcher.addToBatch(amount, farmId, moneyType, constant, cu
             customEnv = moneyType.customEnv,
             constant = constant,
             subjectId = subjectId,
+            subjectName = subjectName,
+            subjectKind = subjectKind,
             locationId = locationId,
             locationName = locationName,
             lastBalance = currentFarmBalance,
@@ -232,10 +241,10 @@ function RmTransactionBatcher.flushBatch(batchKey, logFunction)
 
     -- Log the batched transaction with the captured snapshot, batch info in comment. TL-35: pass a
     -- record table (named fields), NOT positional args. Note the key renames (totalAmount -> amount,
-    -- lastBalance -> currentFarmBalance). TL-22: the batch now carries subject/location context (keyed
-    -- and stored once at addToBatch), so forward it here; logTransaction's (x ~= "" and x) or nil
-    -- normalization handles the three exactly as on the direct path (all nil in normal play until
-    -- capture lands, TL-26..28).
+    -- lastBalance -> currentFarmBalance). TL-22/TL-36: the batch now carries the 5-field subject/location
+    -- context (keyed on subjectId+location, subjectName/subjectKind carried-not-keyed; stored once at
+    -- addToBatch), so forward it here; logTransaction's (x ~= "" and x) or nil normalization handles all
+    -- five exactly as on the direct path (all nil in normal play until capture lands, TL-23..28).
     logFunction({
         amount = batch.totalAmount,
         farmId = batch.farmId,
@@ -246,6 +255,8 @@ function RmTransactionBatcher.flushBatch(batchKey, logFunction)
         currentFarmBalance = batch.lastBalance,
         comment = batchComment,
         subjectId = batch.subjectId,
+        subjectName = batch.subjectName,
+        subjectKind = batch.subjectKind,
         locationId = batch.locationId,
         locationName = batch.locationName,
     })

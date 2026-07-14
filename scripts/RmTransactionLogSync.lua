@@ -4,12 +4,14 @@
 --          TL-11 join / farm-switch snapshot later) reuses writeRow/readRow, so the wire
 --          format lives in exactly ONE place and can never drift between events.
 -- Author: Ritter
--- Model:   Serializes the CURRENT post-TL-5 key-based record (14 fields). Serializing keys is the
+-- Model:   Serializes the CURRENT post-TL-5 key-based record (16 fields). Serializing keys is the
 --          point of TL-5's storage model: each client resolves titles in its own language
---          (project-context "2.0-dev sequencing", why-this-order). The TL-18 enrichment trio
---          (subjectId / locationId / locationName) is APPENDED at the tail (positions 12-14),
---          keeping the locked 11-field prefix byte-stable; subjectId/locationId are stable keys,
---          locationName is a display-name snapshot (text) -- all three ride the wire as Strings.
+--          (project-context "2.0-dev sequencing", why-this-order). The enrichment fields are APPENDED
+--          at the tail (positions 12-16), keeping the locked 11-field prefix byte-stable: the TL-18
+--          trio subjectId / locationId / locationName (12-14) then the TL-36 pair subjectName /
+--          subjectKind (15-16). subjectId/locationId are stable keys, locationName is a display-name
+--          snapshot, subjectName is a display snapshot, subjectKind an open-vocab discriminator -- all
+--          ride the wire as Strings.
 --          Money (amount, currentFarmBalance) serializes as Float32 -- the same width the game
 --          uses to sync money over the network; values above 2^24 lose sub-unit precision exactly
 --          as the game's own money sync does -- correct, not a shortcut.
@@ -47,12 +49,14 @@ function RmTransactionLogSync.writeRow(streamId, row)
     streamWriteString(streamId, row.subjectId or "")                                         -- 12
     streamWriteString(streamId, row.locationId or "")                                        -- 13
     streamWriteString(streamId, row.locationName or "")                                      -- 14
+    streamWriteString(streamId, row.subjectName or "")                                       -- 15
+    streamWriteString(streamId, row.subjectKind or "")                                       -- 16
 end
 
 --- Deserialize a transaction row from a network stream. Mirrors writeRow's field order EXACTLY.
---- Normalizes "" -> nil for customEnv/constant AND the TL-18 enrichment trio (subjectId /
---- locationId / locationName), matching the load-side normalization in
---- RmTransactionLog.loadFromXMLFile where "" and nil are equivalent for these fields (each
+--- Normalizes "" -> nil for customEnv/constant AND the enrichment fields (TL-18 subjectId /
+--- locationId / locationName, TL-36 subjectName / subjectKind), matching the load-side normalization
+--- in RmTransactionLog.loadFromXMLFile where "" and nil are equivalent for these fields (each
 --- normalizes independently, no cross-field coupling). The other coerced-empty strings read back
 --- as "" -- an acceptable degradation for a row that was malformed on the write side.
 ---@param streamId number engine stream handle
@@ -75,9 +79,13 @@ function RmTransactionLogSync.readRow(streamId)
     local subjectId = streamReadString(streamId)                                             -- 12
     local locationId = streamReadString(streamId)                                            -- 13
     local locationName = streamReadString(streamId)                                          -- 14
+    local subjectName = streamReadString(streamId)                                           -- 15
+    local subjectKind = streamReadString(streamId)                                           -- 16
     row.subjectId = (subjectId ~= "" and subjectId) or nil
     row.locationId = (locationId ~= "" and locationId) or nil
     row.locationName = (locationName ~= "" and locationName) or nil
+    row.subjectName = (subjectName ~= "" and subjectName) or nil
+    row.subjectKind = (subjectKind ~= "" and subjectKind) or nil
     return row
 end
 
