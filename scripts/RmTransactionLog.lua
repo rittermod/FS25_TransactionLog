@@ -748,6 +748,197 @@ function RmTransactionLog.installAnimalTradeCaptureHooks()
 end
 
 -- ============================================================
+-- Shop buy/sell subject capture (TL-24): the mod's THIRD prepend site-group. Reads the bought/sold store
+-- item off the six base-game shop entry points BEFORE the engine credits the money, resolves it to
+-- {subjectId=storeItem.xmlFilename, subjectName=<display>, subjectKind="storeItem"}, and stashes it via
+-- setPendingContext so the already-appended changeFarmBalance consumes it and the resulting row carries the
+-- item. FIVE statistics are non-batchable (newVehiclesCost / soldVehicles / soldBuildings / newHandtoolsCost
+-- / soldHandtools -> DIRECT path); the placeable BUY statistic constructionCost IS batchable (it is shared
+-- with landscaping), so that one path rides the TL-22/36 context-threaded batch and its flushed row carries
+-- the subject. Either way changeFarmBalance threads the consumed context onward, so no batcher change is in
+-- scope. Location stays nil (E2.4); ProductionPoint direct-sell is a later ticket.
+-- ============================================================
+
+-- Per-target one-shot install guards (one per shop entry point): each is set true once its prepend is
+-- wrapped, so a second install call never stacks a duplicate prepend, yet a target absent at first call is
+-- still wrapped on a later call (NO permanent lockout). Independent flags so an absent target skips ONLY
+-- itself and never locks out a present sibling.
+RmTransactionLog.buyVehicleHookInstalled = false
+RmTransactionLog.buyPlaceableHookInstalled = false
+RmTransactionLog.buyHandToolHookInstalled = false
+RmTransactionLog.sellVehicleHookInstalled = false
+RmTransactionLog.sellHandToolHookInstalled = false
+RmTransactionLog.sellPlaceableHookInstalled = false
+
+---Build the enrichment subject record for a shop store item. PURE, with field-wise INDEPENDENT nil-degrade:
+---subjectId is the store item's stable xmlFilename KEY, subjectName is the display snapshot (a caller
+---override wins over the base storeItem.name, so a SELL can pass the config/brand-aware runtime getName()),
+---and subjectKind is the exact TL-36 camelCase seed "storeItem". Either id or name may be nil INDEPENDENTLY
+---(the display fallback covers a nil subjectName); each empty string normalizes to nil (matching the
+---resolveAnimalSubjectContext idiom). Returns nil ONLY when nothing is resolvable, so the caller can skip
+---setPendingContext entirely.
+---@param storeItem table|nil the StoreItem (carries .xmlFilename + .name)
+---@param displayNameOverride string|nil a display name preferred over storeItem.name (a sell's getName())
+---@return table|nil subject {subjectId, subjectName, subjectKind="storeItem"} or nil when nothing resolves
+function RmTransactionLog.buildStoreItemSubject(storeItem, displayNameOverride)
+    local isTable = type(storeItem) == "table"
+    local id = (isTable and storeItem.xmlFilename ~= "" and storeItem.xmlFilename) or nil
+    local override = (displayNameOverride ~= nil and displayNameOverride ~= "" and displayNameOverride) or nil
+    local name = override or (isTable and storeItem.name ~= "" and storeItem.name) or nil
+    if id == nil and name == nil then
+        return nil
+    end
+    return {
+        subjectId = id,
+        subjectName = name,
+        subjectKind = "storeItem",
+    }
+end
+
+---Prepend callback for the three shop BUY entry points (BuyVehicleData / BuyPlaceableData / BuyHandToolData
+---onBought). Utils.prependedFunction forwards the hooked call's args, so `buyData` is the Buy*Data instance
+---(the hooked self). Reads buyData.storeItem into the pending subject for the money credit that follows in
+---the same synchronous stack. Sets NO context (and never raises) when: the self is not a table; the owning
+---farm is nil/0 (spectator/unknown -- addMoney early-returns without changeBalance, so a set context would
+---leak onto the NEXT transaction; mirrors the TL-26 farmId guard); the buy is isFreeOfCharge (a
+---mission/tutorial grant fires no addMoney); or leaseVehicle is set (leasing is a NOT-enrichable category --
+---the LEASING_COSTS row stays unenriched; the field is nil on the non-vehicle Buy*Data, which is correctly
+---falsy). Server-authority is enforced ONCE at setPendingContext (g_server-guarded) - NO duplicate guard
+---here. Residual: if the acquisition does not complete (a canceled/failed load), no money credit follows
+---and this prepend cannot detect that, so the armed context leaks to the next changeBalance -- an ACCEPTED,
+---bounded, self-healing residual (see spec Design Notes).
+---@param buyData table the Buy*Data instance (the hooked self, forwarded by prependedFunction)
+function RmTransactionLog.captureBoughtStoreItemContext(buyData, ...)
+    if type(buyData) ~= "table" or buyData.ownerFarmId == nil or buyData.ownerFarmId == 0
+        or buyData.isFreeOfCharge or buyData.leaseVehicle then
+        return
+    end
+    Log:trace("captureBoughtStoreItemContext: ownerFarmId=%s storeItem=%s",
+        tostring(buyData.ownerFarmId), tostring(buyData.storeItem))
+    local ctx = RmTransactionLog.buildStoreItemSubject(buyData.storeItem)
+    if ctx ~= nil then
+        RmTransactionLog.setPendingContext(ctx)
+    end
+end
+
+---Shared SELL adapter for a runtime object that exposes getName() + configFileName (a vehicle or hand
+---tool). Resolves the display name via getName() and the stable key via the store item behind
+---configFileName (g_storeManager:getItemByXMLFilename lowercases internally, so a mixed-case configFileName
+---resolves). The mod's OWN accesses are type-/callability-guarded (getName presence, g_storeManager
+---presence, configFileName is a string) so a renamed/absent method or a drifted field degrades to a
+---partial/no subject in mod code, never a raise. NOTE: the never-raise guarantee covers the mod's OWN
+---accesses; a base-game getName() that is present but itself raises is the engine's contract, outside the
+---mod's degrade scope (it does not, in normal server-side selling). Local: the two sell callbacks delegate here.
+---@param obj table|nil the sold runtime object (event.vehicle / event.handTool)
+local function captureSoldConfigObjectContext(obj)
+    if type(obj) ~= "table" then
+        return
+    end
+    local name = (type(obj.getName) == "function" and obj:getName()) or nil
+    local storeItem = nil
+    -- Guard configFileName is a string BEFORE the lookup: getItemByXMLFilename -> string.lower would raise
+    -- on a non-string/non-number drifted value, so fail closed in mod code rather than lean on engine tolerance.
+    if type(obj.configFileName) == "string" and type(g_storeManager) == "table"
+        and type(g_storeManager.getItemByXMLFilename) == "function" then
+        storeItem = g_storeManager:getItemByXMLFilename(obj.configFileName)
+    end
+    local ctx = RmTransactionLog.buildStoreItemSubject(storeItem, name)
+    if ctx ~= nil then
+        RmTransactionLog.setPendingContext(ctx)
+    end
+end
+
+---Prepend callback for SellVehicleEvent.run: capture the sold vehicle (event.vehicle) as the subject.
+---prependedFunction forwards the hooked args, so `event` is the SellVehicleEvent instance. Delegates to the
+---shared config-object adapter. Empty-degrades (NO context, no raise) on a non-table event or a nil vehicle
+---(incl. the server-to-client REPLY event, whose vehicle is nil). The dominant SELL leak is the in-run
+---validation gate (permission / in-use) that a prepend cannot reach -- an ACCEPTED, bounded, self-healing
+---event-hook residual (sibling to the TL-23 animal-sell leak; see spec Design Notes). No duplicate g_server
+---guard (authority at setPendingContext).
+---@param event table the SellVehicleEvent instance (the hooked self, forwarded by prependedFunction)
+function RmTransactionLog.captureSoldVehicleContext(event, ...)
+    captureSoldConfigObjectContext(type(event) == "table" and event.vehicle or nil)
+end
+
+---Prepend callback for SellHandToolEvent.run: capture the sold hand tool (event.handTool). Mirrors the
+---vehicle sell via the shared adapter. Empty-degrades (NO context, no raise) on a non-table event or a nil
+---handTool (incl. the reply event). Same accepted validation-gate leak + single-guard-point contract as the
+---vehicle sell.
+---@param event table the SellHandToolEvent instance (the hooked self, forwarded by prependedFunction)
+function RmTransactionLog.captureSoldHandToolContext(event, ...)
+    captureSoldConfigObjectContext(type(event) == "table" and event.handTool or nil)
+end
+
+---Prepend callback for SellPlaceableEvent.run: capture the sold placeable via its store item
+---(event.placeable.storeItem) -- NOT placeable:getName() (the usually-nil player custom name; a location
+---concept deferred to E2.4). prependedFunction forwards the hooked args, so `event` is the SellPlaceableEvent
+---instance. Empty-degrades (NO context, no raise) on a non-table event, a nil placeable (incl. the reply
+---event), or a nil/absent storeItem. Also SKIPS a forFree sale (event.forFree): a free sale has no money
+---change, so arming the subject would leak it onto the NEXT changeBalance (e.g. a landscaping
+---constructionCost row when a free removal precedes a terrain edit). event.forFree is a field on the event
+---we prepend -- the sell-side mirror of the buy callback's isFreeOfCharge skip, NOT a tighter post-validation
+---seam. The permission / in-use validation-gate leak (decided inside run, unreachable from a prepend) remains
+---the accepted, bounded, self-healing residual.
+---@param event table the SellPlaceableEvent instance (the hooked self, forwarded by prependedFunction)
+function RmTransactionLog.captureSoldPlaceableContext(event, ...)
+    if type(event) ~= "table" or event.forFree then
+        return
+    end
+    local placeable = event.placeable
+    if type(placeable) ~= "table" then
+        return
+    end
+    local ctx = RmTransactionLog.buildStoreItemSubject(placeable.storeItem)
+    if ctx ~= nil then
+        RmTransactionLog.setPendingContext(ctx)
+    end
+end
+
+-- Descriptor for the six shop prepend targets. className is read from _G at install time (so a target
+-- absent-then-present is still wrapped -- NO lockout), method is the wrapped function, callback is the
+-- RmTransactionLog capture function (resolved by name), flag is the per-target one-shot guard field, and
+-- label names the transaction kind in the log line.
+local SHOP_HOOK_TARGETS = {
+    { className = "BuyVehicleData",     method = "onBought", callback = "captureBoughtStoreItemContext", flag = "buyVehicleHookInstalled",    label = "bought-vehicle" },
+    { className = "BuyPlaceableData",   method = "onBought", callback = "captureBoughtStoreItemContext", flag = "buyPlaceableHookInstalled",  label = "bought-placeable" },
+    { className = "BuyHandToolData",    method = "onBought", callback = "captureBoughtStoreItemContext", flag = "buyHandToolHookInstalled",   label = "bought-hand-tool" },
+    { className = "SellVehicleEvent",   method = "run",      callback = "captureSoldVehicleContext",     flag = "sellVehicleHookInstalled",   label = "sold-vehicle" },
+    { className = "SellHandToolEvent",  method = "run",      callback = "captureSoldHandToolContext",    flag = "sellHandToolHookInstalled",  label = "sold-hand-tool" },
+    { className = "SellPlaceableEvent", method = "run",      callback = "captureSoldPlaceableContext",   flag = "sellPlaceableHookInstalled", label = "sold-placeable" },
+}
+
+---Install the six shop buy/sell prepends ONCE, at file scope. Idempotent + PER-TARGET presence-guarded:
+---each target is wrapped only when its class + method exist AND that target's flag is unset, then its flag
+---is set. A re-call wraps any not-yet-wrapped present target (a target absent at first call but present
+---later is still wrapped - NO permanent lockout). Logs a WARNING per absent target (empty-degrade: the mod
+---still loads; that shop path just records a nil subject). Reads each class from _G at call time so the
+---no-lockout re-wrap sees a late-registered class. In practice all six targets are CORE base-game globals
+---defined during engine script load (before any mod's extraSourceFiles), so they are always present at the
+---single file-scope install call and the no-lockout re-wrap is defensive insurance (mirrors the TL-23
+---installer, which is likewise called once).
+---@return boolean installedThisCall true if this call wrapped at least one prepend, false otherwise
+function RmTransactionLog.installShopSubjectHooks()
+    local installedAny = false
+    for _, target in ipairs(SHOP_HOOK_TARGETS) do
+        if not RmTransactionLog[target.flag] then
+            local class = _G[target.className]
+            if type(class) == "table" and type(class[target.method]) == "function" then
+                class[target.method] = Utils.prependedFunction(
+                    class[target.method], RmTransactionLog[target.callback])
+                RmTransactionLog[target.flag] = true
+                installedAny = true
+                Log:debug("Installed %s.%s %s subject-capture prepend",
+                    target.className, target.method, target.label)
+            else
+                Log:warning("%s.%s unavailable; %s subject capture disabled",
+                    target.className, target.method, target.label)
+            end
+        end
+    end
+    return installedAny
+end
+
+-- ============================================================
 -- Settings change transport (TL-14): server-authoritative apply + persist + broadcast,
 -- with join-time settings sync. The GUI calls requestSettingChange; the server is the boundary.
 -- ============================================================
@@ -1708,6 +1899,12 @@ RmTransactionLog.installSellingStationCaptureHook()
 -- (same once-per-process rule as the TL-26 installer above -- loadMap would stack duplicate prepends). This
 -- is the mod's SECOND prepend site, mirroring the SellingStation installer.
 RmTransactionLog.installAnimalTradeCaptureHooks()
+
+-- Shop buy/sell subject capture (TL-24): install the six shop prepends once, here at FILE scope (same
+-- once-per-process rule as the TL-26/TL-23 installers above -- loadMap would stack duplicate prepends). The
+-- mod's THIRD prepend site-group (three Buy*Data.onBought + three Sell*Event.run); all resolve to
+-- subjectKind "storeItem".
+RmTransactionLog.installShopSubjectHooks()
 
 -- Join delivery (TL-11): append the snapshot send onto FSBaseMission.sendInitialClientState at FILE
 -- scope (NOT in loadMap). A class-method hook must be appended ONCE per process; loadMap re-runs per
