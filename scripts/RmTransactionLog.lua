@@ -38,8 +38,9 @@ RmTransactionLog.previousCalendarYear = nil  -- Format: "YYYY"
 -- scalar module fields behind a RECORD-shaped API (TL-36 decision 2a): setPendingContext(context) reads
 -- context.<field>, consumePendingContext() RETURNS a record + clears the scalars. Default nil; set on the
 -- authority only (setPendingContext is g_server-guarded). SellingStation sales (subject TL-26, location
--- TL-25), animal trades (TL-23), shop buy/sell (TL-24), and production direct-sells (subject + location,
--- TL-28) set context via capture hooks; the remaining subject sites are TL-27.
+-- TL-25), animal trades (TL-23), shop buy/sell (TL-24), production direct-sells (subject + location,
+-- TL-28), and BuyingStation input purchases (subject, TL-27) set context via capture hooks; the deferred
+-- FillTrigger / AI-helper input paths (TL-44) still record no subject.
 RmTransactionLog.pendingSubjectId = nil    -- best-effort key: fillType/animal name, store-item xmlFilename, or nil (verbatim)
 RmTransactionLog.pendingSubjectName = nil  -- always-set display snapshot (capture-hook contract; verbatim)
 RmTransactionLog.pendingSubjectKind = nil  -- open-vocab kind: fillType/animal/storeItem seeds (verbatim)
@@ -191,9 +192,9 @@ end
 ---@field constant string|nil derived MoneyType constant name (e.g. "VEHICLE_REPAIR")
 ---@field currentFarmBalance number|nil farm balance after the transaction (nil -> 0)
 ---@field comment string|nil optional comment for the transaction (nil -> "")
----@field subjectId string|nil enrichment WHAT: best-effort stable key (fillType/animal name, store-item xmlFilename, or nil) (set for SellingStation sales since TL-26, animal trades since TL-23, shop buy/sell since TL-24, and production direct-sells since TL-28; other subject sites TL-27)
----@field subjectName string|nil enrichment WHAT: always-set resolved display snapshot (capture-hook contract; set for SellingStation sales since TL-26, animal trades since TL-23, shop buy/sell since TL-24, and production direct-sells since TL-28; other subject sites TL-27)
----@field subjectKind string|nil enrichment WHAT: open-vocab kind discriminator (fillType/animal/storeItem seeds; set for SellingStation sales since TL-26, animal trades since TL-23, shop buy/sell since TL-24, and production direct-sells since TL-28; other subject sites TL-27)
+---@field subjectId string|nil enrichment WHAT: best-effort stable key (fillType/animal name, store-item xmlFilename, or nil) (set for SellingStation sales since TL-26, animal trades since TL-23, shop buy/sell since TL-24, production direct-sells since TL-28, and BuyingStation input purchases since TL-27)
+---@field subjectName string|nil enrichment WHAT: always-set resolved display snapshot (capture-hook contract; set for SellingStation sales since TL-26, animal trades since TL-23, shop buy/sell since TL-24, production direct-sells since TL-28, and BuyingStation input purchases since TL-27)
+---@field subjectKind string|nil enrichment WHAT: open-vocab kind discriminator (fillType/animal/storeItem seeds; set for SellingStation sales since TL-26, animal trades since TL-23, shop buy/sell since TL-24, production direct-sells since TL-28, and BuyingStation input purchases since TL-27)
 ---@field locationId string|nil enrichment WHERE: placeable uniqueId string (set for SellingStation sales since TL-25, production direct-sells since TL-28)
 ---@field locationName string|nil enrichment WHERE: placeable display-name snapshot (set for SellingStation sales since TL-25, production direct-sells since TL-28)
 
@@ -282,7 +283,8 @@ function RmTransactionLog.logTransaction(record)
     -- threads it here on the DIRECT path. SellingStation sales set the subject (TL-26) AND location (TL-25);
     -- animal trades (TL-23) set the subject and take THIS direct path (newAnimalsCost/soldAnimals are
     -- non-batchable); shop buy/sell (TL-24) sets the subject; production direct-sells (TL-28) set subject +
-    -- location; a txn with no captured subject/location records these nil (other subject sites TL-27). subjectId is a
+    -- location; BuyingStation input purchases (TL-27) are batchable and ride the batcher, NOT this direct
+    -- path; a txn with no captured subject/location records these nil. subjectId is a
     -- best-effort key; subjectName is the always-set display
     -- snapshot (a capture-hook contract, not enforced here); subjectKind is an open-vocab discriminator.
     local transaction = {
@@ -476,8 +478,9 @@ end
 -- Pending context (TL-19): synchronous set/consume-once channel for transaction enrichment.
 -- A call-site prepend-hook stashes a subject/location here IMMEDIATELY before the intended addMoney;
 -- changeFarmBalance consumes it once at entry. SellingStation sales set the subject (TL-26) AND location
--- (TL-25); animal trades (TL-23) and shop buy/sell (TL-24) set the subject; production direct-sells (TL-28)
--- set subject + location; the remaining subject sites are TL-27.
+-- (TL-25); animal trades (TL-23), shop buy/sell (TL-24), and BuyingStation input purchases (TL-27) set the
+-- subject; production direct-sells (TL-28) set subject + location; the deferred FillTrigger / AI-helper
+-- input paths (TL-44) still record no subject.
 -- ============================================================
 
 ---Stash the subject (WHAT) + location (WHERE) for the NEXT authoritative changeBalance. Takes ONE
@@ -1249,6 +1252,158 @@ function RmTransactionLog.installProductionDirectSellHooks()
         end
     end
     return installedAny
+end
+
+-- ============================================================
+-- BuyingStation input-purchase subject capture (TL-27): a RETURN-PRESERVING capture wrap on
+-- BuyingStation.addFillLevelToFillableObject (the mod's SECOND overwrittenFunction site, after TL-28). Arms
+-- the purchased fillType as the subject BEFORE the engine credits the (negative) money, then forwards to the
+-- base and RETURNS its result -- resolves the fillType to {subjectId=fillType.name, subjectName=fillType.title,
+-- subjectKind="fillType"} and stashes it via setPendingContext so the already-appended changeFarmBalance
+-- consumes it and the input purchase's row (batchable purchaseFuel/purchaseSeeds/purchaseFertilizer/
+-- purchaseWater/other) carries the fill type. This uses Utils.overwrittenFunction rather than a bare
+-- Utils.prependedFunction because this method's return value is load-bearing -- the game uses it to keep a
+-- fill going, and a return-discarding wrapper makes the fill stop after one tick (observed in-game) --
+-- see wrapBuyingStationFill. Subject ONLY -- location is out of scope (no input-purchase location ticket
+-- exists). FillTrigger (public gas stations) and the AI-helper input paths are deferred: each credits inside a
+-- loop or per frame, needing a full reimplementation (see the TL-27 spec's Never section).
+-- ============================================================
+
+-- One-shot install guard: set true once the prepend is wrapped, so a second install call (a stray re-source
+-- or a test) never stacks a second prepend on the shared BuyingStation.addFillLevelToFillableObject chain. A
+-- target absent at first call leaves it false so a later call re-wraps (NO permanent lockout).
+RmTransactionLog.buyingStationHookInstalled = false
+
+---Capture callback for BuyingStation.addFillLevelToFillableObject, invoked by wrapBuyingStationFill BEFORE the
+---base runs: resolve the purchased fillType (WHAT) and stash it as the pending subject for the (negative)
+---money charge that follows in the same synchronous stack, so the already-appended changeFarmBalance consumes
+---it and the input-purchase row carries the fill type. PURE arming -- it sets context and returns nothing; the
+---wrap forwards the base's return (see wrapBuyingStationFill). Subject ONLY -- location is deliberately not set
+---(out of scope; no input-purchase location ticket exists). The signature mirrors the base method's params
+---(self first -- it is a colon method), so fillTypeIndex is read positionally (4th incl. self).
+---
+---RAISE-FREE: every read is type()/callability-guarded (no pcall), because a raise in the prepend would break
+---the real purchase. The FillType.UNKNOWN compare is raise-safe: type(FillType)=="table" is checked first, so
+---an absent FillType (odd load order) can never be dereferenced (the mod holds no other FillType.* reference).
+---
+---Leak guard (SOLE early-returns): replicate the base's own entry guard from ENTRY-KNOWABLE params (a nil
+---fillableObject / UNKNOWN or nil fillTypeIndex / zero fillDelta / nil toolType make the base return 0 without
+---crediting), using a stricter type(fillableObject)~="table" since we call :getOwnerFarmId() on it; then skip
+---when getOwnerFarmId() is outside changeFarmBalance's valid range (type~="number" or <=0 or
+--- > FarmManager.MAX_NUM_FARMS -- mirrors that guard EXACTLY, BROADER than the SellingStation hook's ==0, so a
+---negative / reserved (14/15) / >MAX / non-number id cannot arm a leak: a spectator (farm 0) or an
+---unknown/invalid farm is never actually credited (the money never reaches changeBalance), so arming context
+---for it would leak onto the next txn). Two OTHER conditions are NOT
+---entry-knowable, so a topped-off tank or a broke farm (both common in play) arms context with no charge,
+---mis-attributing the fill type to EXACTLY ONE subsequent authoritative transaction. changeFarmBalance clears
+---the holder on every call, bounding this to one row; it is the same REAL, bounded residual TL-23 accepted --
+---not "self-healing".
+---
+---Server-authority is enforced ONCE, at setPendingContext (g_server-guarded) -- deliberately NO duplicate
+---g_server guard here, so a client-side prepend is a harmless read that no-ops at the setter. Past the leak
+---guard the callback ALWAYS sets once (possibly all-nil): an all-nil set is harmless -- changeFarmBalance
+---consumes+clears on every authoritative call, so it behaves exactly like no set. The subject degrades to nil
+---on a nil index / absent/methodless g_fillTypeManager / non-table desc; a nil .name or .title nil-normalizes
+---that field INDEPENDENTLY downstream.
+---@param buyingStation table|nil the BuyingStation instance (self; unused -- present to mirror the signature)
+---@param fillableObject table|nil the object being filled (:getOwnerFarmId gives the charged farm)
+---@param fillUnitIndex number|nil the target fill unit (unused; present to mirror the signature)
+---@param fillTypeIndex number|nil the purchased fillType's runtime index
+---@param fillDelta number|nil the requested fill amount (entry guard: base no-ops on 0)
+---@param fillInfo any the fill info (unused; present to mirror the signature)
+---@param toolType number|nil the tool type (entry guard: base no-ops on nil)
+function RmTransactionLog.captureBuyingStationFillContext(buyingStation, fillableObject, fillUnitIndex,
+        fillTypeIndex, fillDelta, fillInfo, toolType, ...)
+    -- Leak guard (SOLE early-returns): replicate the base's entry guard from entry-knowable params, then the
+    -- farmId range. FillType.UNKNOWN compared raise-safely (FillType may be absent under odd load orders).
+    if type(fillableObject) ~= "table" or fillTypeIndex == nil
+        or (type(FillType) == "table" and fillTypeIndex == FillType.UNKNOWN)
+        or fillDelta == 0 or toolType == nil then
+        return
+    end
+    if type(fillableObject.getOwnerFarmId) ~= "function" then
+        return
+    end
+    local farmId = fillableObject:getOwnerFarmId()
+    Log:trace("captureBuyingStationFillContext: farmId=%s fillTypeIndex=%s",
+        tostring(farmId), tostring(fillTypeIndex))
+    -- Mirror changeFarmBalance's reject range EXACTLY (type-guarded <=0 OR > FarmManager.MAX_NUM_FARMS),
+    -- broader than the SellingStation hook's ==0. A spectator (farm 0), an unknown/invalid farm, or a
+    -- reserved/out-of-range id is never actually credited (the money never reaches changeBalance), so a
+    -- context set for such a purchase would never be consumed and would leak onto the next transaction;
+    -- skipping the whole invalid range (negative / reserved / >MAX / non-number) keeps that from arming. The
+    -- topped-off-tank / broke-farm case (a fill that adds nothing, or an unaffordable one) is NOT
+    -- entry-knowable and stays a bounded one-row residual -- see the docstring.
+    if type(farmId) ~= "number" or farmId <= 0 or farmId > FarmManager.MAX_NUM_FARMS then
+        Log:trace("  skipped: farmId outside the valid capture range (leak guard)")
+        return
+    end
+
+    -- WHAT: resolve the purchased fillType into three nil-degrading locals. Hardened type/function guards so a
+    -- truthy non-table manager, a non-function method, or a non-table desc nil-degrades WITHOUT raising. .name
+    -- is the stable UPPERCASE key ("DIESEL"); .title the localized snapshot ("Diesel"); each nil-normalizes
+    -- independently downstream, so a desc missing either sets that field nil.
+    local subjectId, subjectName, subjectKind = nil, nil, nil
+    if type(g_fillTypeManager) == "table"
+        and type(g_fillTypeManager.getFillTypeByIndex) == "function" then
+        local fillType = g_fillTypeManager:getFillTypeByIndex(fillTypeIndex)
+        if type(fillType) == "table" then
+            subjectId = fillType.name
+            subjectName = fillType.title
+            subjectKind = "fillType"
+        end
+    end
+
+    -- Subject only (past the leak guard, always once): location deliberately NOT set (out of scope). An
+    -- all-nil set is harmless -- changeFarmBalance consumes+clears on every authoritative call, so it behaves
+    -- exactly like no set.
+    Log:trace("  set context: subjectId=%s subjectName=%s subjectKind=%s (location out of scope, nil)",
+        tostring(subjectId), tostring(subjectName), tostring(subjectKind))
+    RmTransactionLog.setPendingContext({
+        subjectId = subjectId,
+        subjectName = subjectName,
+        subjectKind = subjectKind,
+    })
+end
+
+---overwrittenFunction adapter for BuyingStation.addFillLevelToFillableObject. Arms the purchased-fillType
+---subject (via the pure captureBuyingStationFillContext) BEFORE the base runs, then forwards to superFunc and
+---RETURNS its result UNCHANGED. overwrittenFunction (NOT prependedFunction) is REQUIRED here: this method's
+---return value (the applied fill amount) is load-bearing -- the game reads it to decide whether to keep
+---filling, so a return-discarding wrapper makes the fill stop after one tick. A bare Utils.prependedFunction
+---does not preserve the wrapped function's return; Utils.overwrittenFunction lets us return the base's result
+---unchanged. Observed in-game. Arming is a harmless side effect; the return path is byte-identical to the base.
+---@param self table the BuyingStation instance
+---@param superFunc function the base addFillLevelToFillableObject
+---@return number|nil fillDelta the base's applied fill amount, forwarded unchanged
+function RmTransactionLog.wrapBuyingStationFill(self, superFunc, ...)
+    RmTransactionLog.captureBuyingStationFillContext(self, ...)
+    return superFunc(self, ...)
+end
+
+---Install the BuyingStation.addFillLevelToFillableObject capture wrap ONCE, at file scope. Idempotent +
+---presence-guarded, NO permanent lockout: reads BuyingStation from _G at call time and sets the install flag
+---only AFTER wrapping (the TL-24 installer discipline), so a target absent at first call is still wrapped on a
+---later call; a second call once wrapped is a silent no-op. Logs a WARNING and skips when the target is
+---absent (empty-degrade: the mod still loads; input purchases just record a nil subject). BuyingStation is a
+---core base-game global defined during engine script load, so the lockout is theoretical -- but no-lockout is
+---the repo's preferred form. Uses Utils.overwrittenFunction (RETURN-PRESERVING), NOT prependedFunction -- see
+---wrapBuyingStationFill for why the base's return must be forwarded.
+---@return boolean installedThisCall true if this call wrapped the method, false if already installed or skipped
+function RmTransactionLog.installBuyingStationCaptureHook()
+    if RmTransactionLog.buyingStationHookInstalled then
+        return false
+    end
+    local class = _G.BuyingStation
+    if type(class) ~= "table" or type(class.addFillLevelToFillableObject) ~= "function" then
+        Log:warning("BuyingStation.addFillLevelToFillableObject unavailable; input-purchase subject capture disabled")
+        return false
+    end
+    class.addFillLevelToFillableObject = Utils.overwrittenFunction(
+        class.addFillLevelToFillableObject, RmTransactionLog.wrapBuyingStationFill)
+    RmTransactionLog.buyingStationHookInstalled = true
+    Log:debug("Installed BuyingStation.addFillLevelToFillableObject subject-capture wrap (return-preserving)")
+    return true
 end
 
 -- ============================================================
@@ -2225,6 +2380,14 @@ RmTransactionLog.installShopSubjectHooks()
 -- so a prepend cannot tag each row -- see the block above); each target is presence + dependency gated and
 -- degrades to a clean skip + WARNING.
 RmTransactionLog.installProductionDirectSellHooks()
+
+-- BuyingStation input-purchase subject capture (TL-27): install the addFillLevelToFillableObject capture wrap
+-- once, here at FILE scope (same once-per-process rule as the installers above -- loadMap would stack
+-- duplicate wraps). A RETURN-PRESERVING Utils.overwrittenFunction wrap (the mod's SECOND overwrittenFunction
+-- site, after TL-28) -- NOT a prepend, because the method's return value is load-bearing and must be
+-- forwarded (see wrapBuyingStationFill); fuel/seed/fertilizer/water/lime buys at a buying station resolve to subjectKind
+-- "fillType", location left nil (out of scope).
+RmTransactionLog.installBuyingStationCaptureHook()
 
 -- Join delivery (TL-11): append the snapshot send onto FSBaseMission.sendInitialClientState at FILE
 -- scope (NOT in loadMap). A class-method hook must be appended ONCE per process; loadMap re-runs per

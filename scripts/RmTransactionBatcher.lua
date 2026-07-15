@@ -89,7 +89,7 @@ end
 ---farm+money-type (the key string gains normalized-empty segments, but the GROUPING is unchanged).
 ---@param farmId number the farm ID
 ---@param moneyTypeId number|nil the money type's runtime id
----@param subjectId string|nil enrichment WHAT: stable fillType/animal/store-item key (set for SellingStation sales since TL-26; animal trades (TL-23) capture via the non-batchable direct path, never here; shop placeable-BUY (TL-24) constructionCost DOES reach here; other subject sites TL-27/28)
+---@param subjectId string|nil enrichment WHAT: stable fillType/animal/store-item key (set for SellingStation sales since TL-26; animal trades (TL-23) capture via the non-batchable direct path, never here; shop placeable-BUY (TL-24) constructionCost DOES reach here; BuyingStation input purchases (TL-27) and production direct-sells' batchable credits (TL-28) also reach here)
 ---@param locationId string|nil enrichment WHERE: placeable uniqueId (set for SellingStation sales since TL-25; nil for a not-yet-saved placeable)
 ---@param locationName string|nil enrichment WHERE: placeable display-name snapshot
 ---@return string the batch key
@@ -117,14 +117,15 @@ end
 ---createBatchKey is UNCHANGED. SellingStation sales populate the subject (TL-26) AND location (TL-25) here;
 ---animal trades (TL-23) also capture a subject but are non-batchable, so they ride the direct path and never
 ---reach this batcher; shop buy/sell (TL-24) is mostly direct, its batchable placeable-BUY constructionCost
----reaching here; other subject sites TL-27/28; a txn with no captured subject/location keys the same as
+---reaching here; BuyingStation input purchases (TL-27) and production direct-sells' batchable credits (TL-28)
+---also reach here; a txn with no captured subject/location keys the same as
 ---before, so the key degrades to the pre-TL-22 farm+money-type grouping and batching is unchanged.
 ---@param amount number transaction amount
 ---@param farmId number farm ID
 ---@param moneyType table money type (carries id/title/statistic/customEnv)
 ---@param constant string|nil derived MoneyType constant name
 ---@param currentFarmBalance number current farm balance
----@param context table|nil enrichment record {subjectId, subjectName, subjectKind, locationId, locationName} (subject populated for SellingStation sales since TL-26 + shop placeable-BUY since TL-24; location populated for SellingStation sales since TL-25; animal trades (TL-23) capture via the non-batchable direct path; other subject sites TL-27/28)
+---@param context table|nil enrichment record {subjectId, subjectName, subjectKind, locationId, locationName} (subject populated for SellingStation sales since TL-26 + shop placeable-BUY since TL-24 + BuyingStation input purchases since TL-27 + production direct-sells since TL-28; location populated for SellingStation sales since TL-25 + production direct-sells since TL-28; animal trades (TL-23) capture via the non-batchable direct path)
 ---@param logFunction function function to call when batch is flushed (kept LAST)
 function RmTransactionBatcher.addToBatch(amount, farmId, moneyType, constant, currentFarmBalance,
                                          context, logFunction)
@@ -248,8 +249,9 @@ function RmTransactionBatcher.flushBatch(batchKey, logFunction)
     -- context (keyed on subjectId+location, subjectName/subjectKind carried-not-keyed; stored once at
     -- addToBatch), so forward it here; logTransaction's (x ~= "" and x) or nil normalization handles all
     -- five exactly as on the direct path (subject populated for SellingStation sales since TL-26 + shop
-    -- placeable-BUY since TL-24; location for SellingStation sales since TL-25; animal trades (TL-23) capture
-    -- via the non-batchable direct path, not here; other subject sites TL-27/28).
+    -- placeable-BUY since TL-24 + BuyingStation input purchases since TL-27 + production direct-sells since
+    -- TL-28; location for SellingStation sales since TL-25 + production direct-sells since TL-28; animal
+    -- trades (TL-23) capture via the non-batchable direct path, not here).
     logFunction({
         amount = batch.totalAmount,
         farmId = batch.farmId,
