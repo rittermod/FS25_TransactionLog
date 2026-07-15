@@ -38,13 +38,13 @@ RmTransactionLog.previousCalendarYear = nil  -- Format: "YYYY"
 -- scalar module fields behind a RECORD-shaped API (TL-36 decision 2a): setPendingContext(context) reads
 -- context.<field>, consumePendingContext() RETURNS a record + clears the scalars. Default nil; set on the
 -- authority only (setPendingContext is g_server-guarded). SellingStation sales (subject TL-26, location
--- TL-25), animal trades (TL-23), and shop buy/sell (TL-24) set context via capture hooks; the remaining
--- subject sites are TL-27/28 and location for production direct-sell is TL-28.
+-- TL-25), animal trades (TL-23), shop buy/sell (TL-24), and production direct-sells (subject + location,
+-- TL-28) set context via capture hooks; the remaining subject sites are TL-27.
 RmTransactionLog.pendingSubjectId = nil    -- best-effort key: fillType/animal name, store-item xmlFilename, or nil (verbatim)
 RmTransactionLog.pendingSubjectName = nil  -- always-set display snapshot (capture-hook contract; verbatim)
 RmTransactionLog.pendingSubjectKind = nil  -- open-vocab kind: fillType/animal/storeItem seeds (verbatim)
-RmTransactionLog.pendingLocationId = nil   -- placeable uniqueId string, SellingStation sales since TL-25 (verbatim)
-RmTransactionLog.pendingLocationName = nil -- placeable display-name snapshot, SellingStation sales since TL-25 (verbatim)
+RmTransactionLog.pendingLocationId = nil   -- placeable uniqueId string, SellingStation sales since TL-25, production direct-sells since TL-28 (verbatim)
+RmTransactionLog.pendingLocationName = nil -- placeable display-name snapshot, SellingStation sales since TL-25, production direct-sells since TL-28 (verbatim)
 
 ---Creates a new RmTransactionLog instance
 ---@param customMt table|nil optional custom metatable
@@ -191,11 +191,11 @@ end
 ---@field constant string|nil derived MoneyType constant name (e.g. "VEHICLE_REPAIR")
 ---@field currentFarmBalance number|nil farm balance after the transaction (nil -> 0)
 ---@field comment string|nil optional comment for the transaction (nil -> "")
----@field subjectId string|nil enrichment WHAT: best-effort stable key (fillType/animal name, store-item xmlFilename, or nil) (set for SellingStation sales since TL-26, animal trades since TL-23, and shop buy/sell since TL-24; other subject sites TL-27/28)
----@field subjectName string|nil enrichment WHAT: always-set resolved display snapshot (capture-hook contract; set for SellingStation sales since TL-26, animal trades since TL-23, and shop buy/sell since TL-24; other subject sites TL-27/28)
----@field subjectKind string|nil enrichment WHAT: open-vocab kind discriminator (fillType/animal/storeItem seeds; set for SellingStation sales since TL-26, animal trades since TL-23, and shop buy/sell since TL-24; other subject sites TL-27/28)
----@field locationId string|nil enrichment WHERE: placeable uniqueId string (set for SellingStation sales since TL-25; production direct-sell TL-28)
----@field locationName string|nil enrichment WHERE: placeable display-name snapshot (set for SellingStation sales since TL-25; production direct-sell TL-28)
+---@field subjectId string|nil enrichment WHAT: best-effort stable key (fillType/animal name, store-item xmlFilename, or nil) (set for SellingStation sales since TL-26, animal trades since TL-23, shop buy/sell since TL-24, and production direct-sells since TL-28; other subject sites TL-27)
+---@field subjectName string|nil enrichment WHAT: always-set resolved display snapshot (capture-hook contract; set for SellingStation sales since TL-26, animal trades since TL-23, shop buy/sell since TL-24, and production direct-sells since TL-28; other subject sites TL-27)
+---@field subjectKind string|nil enrichment WHAT: open-vocab kind discriminator (fillType/animal/storeItem seeds; set for SellingStation sales since TL-26, animal trades since TL-23, shop buy/sell since TL-24, and production direct-sells since TL-28; other subject sites TL-27)
+---@field locationId string|nil enrichment WHERE: placeable uniqueId string (set for SellingStation sales since TL-25, production direct-sells since TL-28)
+---@field locationName string|nil enrichment WHERE: placeable display-name snapshot (set for SellingStation sales since TL-25, production direct-sells since TL-28)
 
 ---Logs a single transaction to the transaction log.
 ---Stores the money-type snapshot RAW (i18n keys + identity), never resolved text -
@@ -281,8 +281,8 @@ function RmTransactionLog.logTransaction(record)
     -- additive nil-normalized fields; TL-19 consumes the pending-context holder in changeFarmBalance and
     -- threads it here on the DIRECT path. SellingStation sales set the subject (TL-26) AND location (TL-25);
     -- animal trades (TL-23) set the subject and take THIS direct path (newAnimalsCost/soldAnimals are
-    -- non-batchable); shop buy/sell (TL-24) sets the subject; a txn with no captured subject/location records
-    -- these nil (other subject sites TL-27/28; production direct-sell location TL-28). subjectId is a
+    -- non-batchable); shop buy/sell (TL-24) sets the subject; production direct-sells (TL-28) set subject +
+    -- location; a txn with no captured subject/location records these nil (other subject sites TL-27). subjectId is a
     -- best-effort key; subjectName is the always-set display
     -- snapshot (a capture-hook contract, not enforced here); subjectKind is an open-vocab discriminator.
     local transaction = {
@@ -476,8 +476,8 @@ end
 -- Pending context (TL-19): synchronous set/consume-once channel for transaction enrichment.
 -- A call-site prepend-hook stashes a subject/location here IMMEDIATELY before the intended addMoney;
 -- changeFarmBalance consumes it once at entry. SellingStation sales set the subject (TL-26) AND location
--- (TL-25); animal trades (TL-23) and shop buy/sell (TL-24) set the subject; the remaining subject sites are
--- TL-27/28 and location for production direct-sell is TL-28.
+-- (TL-25); animal trades (TL-23) and shop buy/sell (TL-24) set the subject; production direct-sells (TL-28)
+-- set subject + location; the remaining subject sites are TL-27.
 -- ============================================================
 
 ---Stash the subject (WHAT) + location (WHERE) for the NEXT authoritative changeBalance. Takes ONE
@@ -530,7 +530,7 @@ end
 -- Reads the sold fillType (WHAT) AND the station's location (WHERE) off SellingStation.sellFillType BEFORE
 -- the engine credits the money, and stashes them as ONE pending context (via setPendingContext) so the
 -- already-appended changeFarmBalance consumes it and the sale's row carries the fill type + the station.
--- ProductionPoint direct-sell location is a later ticket (TL-28).
+-- ProductionPoint direct-sell subject + location is captured in TL-28 (its own overwrite block below).
 -- ============================================================
 
 -- One-shot install guard: set true once the prepend is wrapped, so a second install call (a stray
@@ -831,7 +831,7 @@ end
 -- with landscaping), so that one path rides the TL-22/36 context-threaded batch and its flushed row carries
 -- the subject. Either way changeFarmBalance threads the consumed context onward, so no batcher change is in
 -- scope. Location stays nil for shop buy/sell (shop purchases have no station self; TL-25's location capture
--- covers selling-station sales only). ProductionPoint direct-sell is a later ticket (TL-28).
+-- covers selling-station sales only). ProductionPoint direct-sell captures subject + location in TL-28.
 -- ============================================================
 
 -- Per-target one-shot install guards (one per shop entry point): each is set true once its prepend is
@@ -1007,6 +1007,244 @@ function RmTransactionLog.installShopSubjectHooks()
             else
                 Log:warning("%s.%s unavailable; %s subject capture disabled",
                     target.className, target.method, target.label)
+            end
+        end
+    end
+    return installedAny
+end
+
+-- ============================================================
+-- Production direct-sell subject + location capture (TL-28): the mod's FIRST overwrite site-group. When a
+-- production sells its outputs directly, each output is credited separately (one credit per output), so a
+-- single prepend (which arms the pending holder once, up front) can only tag the first credit. Instead we
+-- OVERWRITE the two direct-sell functions and reimplement their observable payout
+-- behavior, adding exactly one behavior: arm each iteration's own output as the subject (WHAT) and the
+-- production as the location (WHERE) immediately before that iteration's credit, so the already-appended
+-- changeFarmBalance consumes the right context per row. This is a full reimplementation (superFunc is
+-- unused); only the mod-owned resolve/arm helpers below are raise-free, while the reproduced economic reads
+-- (fill-type category, per-liter price) intentionally carry the same runtime assumptions as the base game.
+-- ============================================================
+
+-- Per-target one-shot install guards, one per overwritten function. A target absent (or with a drifted
+-- install-time dependency) at first call is skipped and left un-flagged, so a later call can still install
+-- it -- no permanent lockout, mirroring the shop installer.
+RmTransactionLog.productionUpdateSoldHookInstalled = false
+RmTransactionLog.productionDirectSellHookInstalled = false
+
+---Resolve a production's WHERE (location) to its owning-placeable id + a display-name snapshot. PURE and
+---RAISE-FREE BY CONSTRUCTION -- this runs inside an overwritten payout function, so a raise here would
+---break the sale -- so every access is type()/callability-guarded and there is NO pcall. Returns two plain
+---string snapshots copied at call time (retaining no reference to the placeable), so a placeable deleted
+---before a batch flush cannot cause a stale deref. locationId is the owning placeable's stable unique id
+---(nil for a not-yet-synchronized placeable, or an empty id, both normalized to nil). locationName prefers
+---the production's own name, falling back to the owning placeable's name -- read defensively (rather than
+---via the production's own name accessor, which can raise when its owning placeable is absent), so re-audit
+---here if that naming behavior changes. A locationName of
+---nil (neither name present) is an accepted degrade.
+---@param production table|nil the ProductionPoint instance
+---@return string|nil locationId the owning placeable's unique id (nil when absent / not-yet-saved / empty)
+---@return string|nil locationName the production name, else the owning placeable name, else nil
+function RmTransactionLog.resolveProductionLocation(production)
+    if type(production) ~= "table" then
+        return nil, nil
+    end
+    local placeable = production.owningPlaceable
+    local placeableIsTable = type(placeable) == "table"
+
+    local locationId = nil
+    if placeableIsTable and type(placeable.getUniqueId) == "function" then
+        local uid = placeable:getUniqueId()
+        if type(uid) == "string" and uid ~= "" then
+            locationId = uid
+        end
+    end
+
+    local locationName = nil
+    if type(production.name) == "string" and production.name ~= "" then
+        locationName = production.name
+    elseif placeableIsTable and type(placeable.getName) == "function" then
+        local placeableName = placeable:getName()
+        if type(placeableName) == "string" and placeableName ~= "" then
+            locationName = placeableName
+        end
+    end
+
+    return locationId, locationName
+end
+
+---Build the enrichment context (subject + location) for one directly-sold production output. RAISE-FREE:
+---the fill-type lookup is hardened (a truthy non-table manager, a non-function method, or a non-table desc
+---nil-degrades the subject WITHOUT dropping the location, and vice-versa -- the two dimensions are
+---orthogonal). The subject is the output fill type: subjectId = its stable key (.name), subjectName = its
+---localized title, subjectKind = the exact seed "fillType"; each field nil-normalizes downstream if the
+---desc lacks it. Always returns a record (any field may be nil); an all-nil record is harmless (consumed +
+---cleared exactly like no set).
+---@param production table|nil the ProductionPoint instance (for the location)
+---@param fillTypeIndex number|nil the output fill type's runtime index (for the subject)
+---@return table context a record {subjectId, subjectName, subjectKind, locationId, locationName}
+function RmTransactionLog.buildProductionDirectSellContext(production, fillTypeIndex)
+    local subjectId, subjectName, subjectKind = nil, nil, nil
+    if fillTypeIndex ~= nil
+        and type(g_fillTypeManager) == "table"
+        and type(g_fillTypeManager.getFillTypeByIndex) == "function" then
+        local fillType = g_fillTypeManager:getFillTypeByIndex(fillTypeIndex)
+        if type(fillType) == "table" then
+            subjectId = fillType.name
+            subjectName = fillType.title
+            subjectKind = "fillType"
+        end
+    end
+
+    local locationId, locationName = RmTransactionLog.resolveProductionLocation(production)
+
+    return {
+        subjectId = subjectId,
+        subjectName = subjectName,
+        subjectKind = subjectKind,
+        locationId = locationId,
+        locationName = locationName,
+    }
+end
+
+---Body seam called once per output, immediately before that output's money credit: stash its subject +
+---the production location as the pending context for the credit that follows in the same synchronous stack.
+---Leak-guarded on the owning farm (nil/0 -> skip arming): a credit for farm 0 (spectator/unknown) early-
+---returns without changeBalance, so an armed context would leak onto the NEXT server transaction. ownerFarmId
+---is a per-production field, constant across the payout loop, so the guard is all-or-nothing within a call.
+---A nonzero ownerFarmId whose farm is not registered (getFarmById nil - a mid-deletion race, or a reserved
+---id) is NOT caught here; addMoney likewise early-returns without changeBalance, leaving the same bounded,
+---self-healing residual the sibling capture hooks carry (the next authoritative credit overwrites the holder).
+---Server-authority is enforced once, at setPendingContext (g_server-guarded) -- no duplicate guard here.
+---@param production table the ProductionPoint instance (the overwritten self)
+---@param fillTypeIndex number|nil the output fill type's runtime index
+function RmTransactionLog.armProductionDirectSellContext(production, fillTypeIndex)
+    local ownerFarmId = (type(production) == "table" and production.ownerFarmId) or nil
+    if ownerFarmId == nil or ownerFarmId == 0 then
+        return
+    end
+    Log:trace("armProductionDirectSellContext: ownerFarmId=%s fillTypeIndex=%s",
+        tostring(ownerFarmId), tostring(fillTypeIndex))
+    RmTransactionLog.setPendingContext(
+        RmTransactionLog.buildProductionDirectSellContext(production, fillTypeIndex))
+end
+
+-- Map a produced fill type to its income ledger category (observable: products post as sold-products, BGA
+-- feedstock as BGA income, and everything else as generic harvest income; the product check takes
+-- precedence). This reproduces base classification, so the category read intentionally carries the base
+-- game's own runtime assumption (it is NOT independently hardened -- that would diverge from base behavior).
+local function classifyProductionIncome(outputType)
+    if g_fillTypeManager:getIsFillTypeInCategory(outputType, "PRODUCT") then
+        return MoneyType.SOLD_PRODUCTS
+    elseif g_fillTypeManager:getIsFillTypeInCategory(outputType, "PRODUCT_BGA") then
+        return MoneyType.INCOME_BGA
+    end
+    return MoneyType.HARVEST_INCOME
+end
+
+-- Arm the per-output enrichment and then post its credit, as one step, so the pending subject/location is
+-- set on the holder immediately before the money change that consumes it. Shared by both overwrites; the
+-- caller supplies the already-computed payout and its ledger category.
+local function armAndPostDirectSale(production, outputType, payout, ledgerType)
+    RmTransactionLog.armProductionDirectSellContext(production, outputType)
+    production.mission:addMoney(payout, production.ownerFarmId, ledgerType, true)
+end
+
+---Overwrite of ProductionPoint:updateBalaceDirectlySoldOutputs (base name kept so the wrap targets the real
+---method). Reimplements the observable behavior: for an owned, server-side production, pay out every fill
+---type queued for direct sale at its full per-liter price, classify each into its income ledger, credit it,
+---and reset that queued amount to zero (a value assignment, which is safe while iterating). The one added
+---behavior is arming each output's subject + the production location immediately before its credit.
+---superFunc is intentionally unused -- tagging each per-output credit requires reimplementing the loop.
+---@param self table the ProductionPoint instance
+---@param superFunc function the wrapped original (unused)
+function RmTransactionLog.overwriteUpdateBalaceDirectlySoldOutputs(self, superFunc, ...)
+    if not (self.isOwned and self.isServer) then
+        return
+    end
+    for outputType, pendingLitres in pairs(self.soldFillTypesToPayOut) do
+        local ledgerType = classifyProductionIncome(outputType)
+        local payout = pendingLitres * g_currentMission.economyManager:getPricePerLiter(outputType)
+        armAndPostDirectSale(self, outputType, payout, ledgerType)
+        self.soldFillTypesToPayOut[outputType] = 0
+    end
+end
+
+---Overwrite of ProductionPoint:directlySellOutputs. Reimplements the observable behavior: for each output
+---configured for direct sale, sell the amount currently in storage at the direct-sale discounted per-liter
+---price, post it as sold-products income, and empty that output's storage. Outputs holding nothing are
+---skipped. The one added behavior is arming each sold output's subject + the production location immediately
+---before its credit -- placed INSIDE the positive-amount branch, so an empty output never leaves an
+---unconsumed armed context. There is deliberately no owned/server guard in this body -- this path is only
+---reached for owned, server-side productions, so a guard here would be redundant; superFunc is unused (full
+---reimplementation).
+---@param self table the ProductionPoint instance
+---@param superFunc function the wrapped original (unused)
+function RmTransactionLog.overwriteDirectlySellOutputs(self, superFunc, ...)
+    local discountFactor = ProductionPoint.DIRECT_SELL_PRICE_FACTOR
+    for outputType in pairs(self.outputFillTypeIdsDirectSell) do
+        local storedLitres = self.storage:getFillLevel(outputType)
+        if storedLitres > 0 then
+            local payout = discountFactor * storedLitres * g_currentMission.economyManager:getPricePerLiter(outputType)
+            armAndPostDirectSale(self, outputType, payout, MoneyType.SOLD_PRODUCTS)
+            self.storage:setFillLevel(0, outputType)
+        end
+    end
+end
+
+-- Descriptor for the two production direct-sell overwrite targets. method is the real ProductionPoint
+-- method to wrap, overwrite names the RmTransactionLog reimplementation, flag is the per-target one-shot
+-- guard, dependenciesOk is an install-time PRESENCE check for the exact engine constants that target's
+-- reimplementation hard-codes (a narrow check -- runtime API shapes cannot be verified at file scope), and
+-- label names the site in the log line.
+local PRODUCTION_HOOK_TARGETS = {
+    {
+        method = "updateBalaceDirectlySoldOutputs",
+        overwrite = "overwriteUpdateBalaceDirectlySoldOutputs",
+        flag = "productionUpdateSoldHookInstalled",
+        label = "production paid-out direct sale",
+        dependenciesOk = function()
+            return type(MoneyType) == "table"
+                and MoneyType.HARVEST_INCOME ~= nil
+                and MoneyType.SOLD_PRODUCTS ~= nil
+                and MoneyType.INCOME_BGA ~= nil
+        end,
+    },
+    {
+        method = "directlySellOutputs",
+        overwrite = "overwriteDirectlySellOutputs",
+        flag = "productionDirectSellHookInstalled",
+        label = "production direct sale",
+        dependenciesOk = function()
+            return type(MoneyType) == "table"
+                and MoneyType.SOLD_PRODUCTS ~= nil
+                and type(ProductionPoint.DIRECT_SELL_PRICE_FACTOR) == "number"
+        end,
+    },
+}
+
+---Install the production direct-sell overwrites ONCE, at file scope. PER-TARGET presence + dependency
+---gated: a target is overwritten only when ProductionPoint + its method exist AND that target's install-
+---time dependencies are intact, then its flag is set. When the method is absent OR a dependency has drifted,
+---that target is SKIPPED with a WARNING and left un-flagged -- the base function runs unchanged (the row
+---keeps its coarse label), no overwrite is installed, and a later call can still install it (no lockout).
+---A skip is never-wrong; it just captures nothing for that target. Both branches never crash and never
+---double-count.
+---@return boolean installedThisCall true if this call installed at least one overwrite, false otherwise
+function RmTransactionLog.installProductionDirectSellHooks()
+    local installedAny = false
+    for _, target in ipairs(PRODUCTION_HOOK_TARGETS) do
+        if not RmTransactionLog[target.flag] then
+            local methodPresent = type(ProductionPoint) == "table"
+                and type(ProductionPoint[target.method]) == "function"
+            if methodPresent and target.dependenciesOk() then
+                ProductionPoint[target.method] = Utils.overwrittenFunction(
+                    ProductionPoint[target.method], RmTransactionLog[target.overwrite])
+                RmTransactionLog[target.flag] = true
+                installedAny = true
+                Log:debug("Installed ProductionPoint.%s %s capture overwrite", target.method, target.label)
+            else
+                Log:warning("ProductionPoint.%s unavailable or dependency drifted; %s capture disabled (base behavior unchanged)",
+                    target.method, target.label)
             end
         end
     end
@@ -1980,6 +2218,13 @@ RmTransactionLog.installAnimalTradeCaptureHooks()
 -- mod's THIRD prepend site-group (three Buy*Data.onBought + three Sell*Event.run); all resolve to
 -- subjectKind "storeItem".
 RmTransactionLog.installShopSubjectHooks()
+
+-- Production direct-sell subject + location capture (TL-28): install the two ProductionPoint overwrites
+-- once, here at FILE scope (same once-per-process rule as the installers above -- loadMap would stack
+-- duplicate wraps). The mod's FIRST overwrite site-group (the per-output money credits sit inside a loop,
+-- so a prepend cannot tag each row -- see the block above); each target is presence + dependency gated and
+-- degrades to a clean skip + WARNING.
+RmTransactionLog.installProductionDirectSellHooks()
 
 -- Join delivery (TL-11): append the snapshot send onto FSBaseMission.sendInitialClientState at FILE
 -- scope (NOT in loadMap). A class-method hook must be appended ONCE per process; loadMap re-runs per
