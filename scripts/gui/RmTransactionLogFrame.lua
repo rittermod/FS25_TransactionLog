@@ -186,6 +186,47 @@ function RmTransactionLogFrame:getNumberOfItemsInSection(list, section)
     end
 end
 
+-- TEMPORARY (pre-TL-37 display surface): overlay the captured subject/location enrichment into the
+-- comment column so coverage is eyeball-able during real gameplay before the dedicated GUI columns
+-- (TL-20/21/37) land. PURE display synthesis - the stored `comment` field and all persisted data are
+-- untouched (nothing here writes back, exports, or crosses the MP codec). Remove this whole helper and
+-- restore `transaction.comment or ""` at the call site once real columns exist.
+--   - subject only:                              "Barley"
+--   - subject + location:                        "Barley @ Grain Elevator"
+--   - batched (auto "Combined N transactions"):  replaced -> "Barley @ Grain Elevator (xN)"
+--   - direct row + real user comment:            "Barley @ Grain Elevator | <comment>"
+--   - no enrichment captured:                    the stored comment is shown unchanged
+---@param transaction table the transaction record
+---@return string display the string for the comment cell
+function RmTransactionLogFrame.formatEnrichedComment(transaction)
+    local subjectName = transaction.subjectName
+    local locationName = transaction.locationName
+
+    local enrichment = (subjectName ~= nil and subjectName ~= "") and subjectName or ""
+    if locationName ~= nil and locationName ~= "" then
+        enrichment = (enrichment ~= "" and (enrichment .. " @ ") or "@ ") .. locationName
+    end
+
+    local comment = transaction.comment or ""
+    if enrichment == "" then
+        -- Nothing captured for this row: leave the stored comment / "Combined N" as-is.
+        return comment
+    end
+
+    -- Batched rows carry the auto-generated "Combined N transactions" (RmTransactionBatcher, English,
+    -- not i18n) - replace it with the enrichment but keep the count compact as (xN).
+    local combinedCount = string.match(comment, "^Combined (%d+) transactions$")
+    if combinedCount ~= nil then
+        return string.format("%s (x%s)", enrichment, combinedCount)
+    end
+
+    if comment == "" then
+        return enrichment
+    end
+    -- Direct row with a real user comment: show the enrichment, keep the comment.
+    return enrichment .. " | " .. comment
+end
+
 function RmTransactionLogFrame:populateCellForItemInSection(list, section, index, cell)
     if list == self.transactionTable then
         local transaction = self.transactions[index]
@@ -223,7 +264,7 @@ function RmTransactionLogFrame:populateCellForItemInSection(list, section, index
                 balanceElement.textColor = RmTransactionLogFrame.NEGATIVE_COLOR
             end
 
-            cell:getAttribute("comment"):setText(transaction.comment or "")
+            cell:getAttribute("comment"):setText(RmTransactionLogFrame.formatEnrichedComment(transaction))
         end
     end
 end
