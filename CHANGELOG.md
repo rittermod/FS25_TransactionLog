@@ -2,6 +2,20 @@
 
 All notable user-facing changes to FS25 Transaction Log are documented here.
 
+2.0.0.0-dev.3:
+- Fixed: the transaction log window (Right Shift + T) and comment input no longer fail to open when the mod loads before other Ritter mods.
+- Changed: Internal groundwork for transaction enrichment - buying field inputs (fuel, seed, fertilizer, water, lime) at a buying station now records which input was bought as the transaction's subject. Captured behind the scenes; not shown in the log yet, so no visible change for players.
+- Changed: Internal groundwork for transaction enrichment - when a production sells its outputs directly (e.g. a bakery selling bread), each sale now records which output was sold and which production it came from. Captured behind the scenes; not shown in the log yet, so no visible change for players.
+- Changed: Internal groundwork for transaction enrichment - sales at a selling point now record which fill type was sold (e.g. Barley) as the transaction's subject. Captured behind the scenes; not shown in the log yet, so no visible change for players.
+- Changed: Internal groundwork for transaction enrichment - sales at a selling point now also record where they happened (the selling station's name) alongside the fill type. Captured behind the scenes; not shown in the log yet, so no visible change for players.
+- Changed: Internal groundwork for transaction enrichment - buying or selling animals at the animal dealer now records which animal was traded (e.g. a Holstein cow) as the transaction's subject. Captured behind the scenes; not shown in the log yet, so no visible change for players.
+- Changed: Internal groundwork for transaction enrichment - buying or selling a vehicle, tool, or placeable now records which item it was (e.g. a specific tractor or barn) as the transaction's subject. Captured behind the scenes; not shown in the log yet, so no visible change for players.
+- Changed: Internal groundwork for transaction enrichment - locked in the shape a transaction's subject (what) will use: a display name, a kind (fill type, animal, or store item), and a best-effort id. This widens the earlier fill-type-only groundwork so future detail can also cover bought/sold vehicles, tools, and placeables. Not populated yet; no change for players.
+- Changed: Internal groundwork for transaction enrichment - batching now keeps transactions with a different subject (what) or location (where) in separate groups instead of merging them, and the concurrent-batch limit was raised (50 to 512) so the finer grouping cannot force a group to flush early. Not active yet; no change for players.
+- Changed: Internal groundwork for transaction enrichment - reworked how a transaction's fields are passed at capture (named fields instead of positional order) to prevent mix-ups as more detail is added. No change for players.
+- Internal groundwork for transaction enrichment - added the mechanism that will attach a transaction's subject (what) and location (where) at capture. Not active yet; no change for players.
+- Changed: Internal groundwork for upcoming transaction detail - the save file and network layer can now carry what a transaction was about (fill type / animal) and where it happened (placeable). Not populated yet; no change in singleplayer.
+
 2.0.0.0-dev.2:
 - Multiplayer: players now see and export only their own farm's transaction log (view and export isolation).
 - Server: automatic CSV exports are now split per farm - one file per farm each day/month/year, so no auto-export file mixes different farms' transactions.
