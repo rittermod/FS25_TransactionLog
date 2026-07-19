@@ -49,13 +49,20 @@
             </GuiElement>
         </GuiElement>
 
-        <!-- Buttons -->
-        <BoxLayout profile="fs25_dialogButtonBox" size="1200px 60px">
+        <!-- Buttons. The box is id'd (buttonBox) so a mid-session view-mode toggle can invalidateLayout it
+             after hiding/showing the three action buttons - the box does not re-flow on its own when a
+             child's visibility changes. The always-visible Cycle + Close pair is grouped on the right so the
+             Cycle button does not jump when the action buttons toggle. -->
+        <BoxLayout profile="fs25_dialogButtonBox" size="1200px 60px" id="buttonBox">
             <Button profile="buttonCancel" text="$l10n_ui_button_clear_log" onClick="onClickClearLog" id="buttonClearLog"/>
             <Bitmap profile="fs25_dialogButtonBoxSeparator"/>
             <Button profile="buttonExtra1" text="$l10n_ui_button_export_csv" onClick="onClickExportCSV" id="buttonExportCSV"/>
             <Bitmap profile="fs25_dialogButtonBoxSeparator"/>
             <Button profile="buttonOK" text="$l10n_ui_button_add_comment" onClick="onClickAddComment" id="buttonAddComment"/>
+            <Bitmap profile="fs25_dialogButtonBoxSeparator"/>
+            <!-- Cycle-view button (MENU_EXTRA_2 via the buttonTimeframeCycle mod profile). Label is set at
+                 runtime by updateCycleButtonLabel ("View: <mode>"). Always visible. -->
+            <Button profile="buttonTimeframeCycle" onClick="onClickCycleView" id="buttonCycleView"/>
             <Bitmap profile="fs25_dialogButtonBoxSeparator"/>
             <Button profile="buttonBack" text="$l10n_ui_button_close" onClick="onClickClose"/>
         </BoxLayout>

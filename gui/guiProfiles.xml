@@ -51,4 +51,12 @@
     <Profile name="dialogTableSummary" extends="emptyPanel" with="anchorStretchingYLeft pivotTopLeft">
     </Profile>
 
+    <!-- Cycle-view button (TL-49): a wide dialog button bound to MENU_EXTRA_2. It must use a DIFFERENT
+         menu_extra action from the Export button (which binds MENU_EXTRA_1 via its buttonExtra1 profile), so
+         one keypress never triggers both. The mod defines its own profile because no shared MENU_EXTRA_2
+         button profile is available to extend. -->
+    <Profile name="buttonTimeframeCycle" extends="fs25_wideButton" with="touchButton">
+        <inputAction value="MENU_EXTRA_2"/>
+    </Profile>
+
 </GUIProfiles>

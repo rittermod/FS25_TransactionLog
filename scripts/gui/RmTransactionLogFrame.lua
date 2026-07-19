@@ -37,8 +37,51 @@ RmTransactionLogFrame.CONTROLS = {
     "buttonAddComment",
     "buttonClearLog",
     "buttonExportCSV",
+    "buttonCycleView",
+    "buttonBox",
     "emptyHintText"
 }
+
+-- Timeframe view modes (TL-49). The log can roll the already-farm-filtered rows up by time. Individual
+-- shows raw transactions newest-first (behaviourally unchanged from earlier versions); the three combined
+-- modes group + net-sum by (truncated date, statistic, subject-identity, location-identity). DISPLAY-ONLY:
+-- no data-model / persistence / MP-codec / batching / capture change.
+RmTransactionLogFrame.VIEW_MODE = {
+    INDIVIDUAL = "individual",
+    DAY = "day",
+    PERIOD = "period",
+    YEAR = "year",
+}
+
+-- Cycle order: the button (or MENU_EXTRA_2) advances Individual -> Day -> Period -> Year -> (wrap).
+RmTransactionLogFrame.VIEW_MODE_ORDER = {
+    RmTransactionLogFrame.VIEW_MODE.INDIVIDUAL,
+    RmTransactionLogFrame.VIEW_MODE.DAY,
+    RmTransactionLogFrame.VIEW_MODE.PERIOD,
+    RmTransactionLogFrame.VIEW_MODE.YEAR,
+}
+
+-- Date-prefix length per COMBINED mode of the stored "YYYY-MM-DD HH:MM": Day = "YYYY-MM-DD" (10),
+-- Period = "YYYY-MM" (7, one bucket per in-game period projected to a 1-12 calendar month), Year = "YYYY"
+-- (4). Individual is intentionally absent (the caller never truncates in Individual mode).
+RmTransactionLogFrame.VIEW_MODE_DATE_LEN = {
+    [RmTransactionLogFrame.VIEW_MODE.DAY] = 10,
+    [RmTransactionLogFrame.VIEW_MODE.PERIOD] = 7,
+    [RmTransactionLogFrame.VIEW_MODE.YEAR] = 4,
+}
+
+-- l10n key for each mode's name, interpolated into the cycle-button label ("View: %s").
+RmTransactionLogFrame.VIEW_MODE_LABEL_KEY = {
+    [RmTransactionLogFrame.VIEW_MODE.INDIVIDUAL] = "ui_view_individual",
+    [RmTransactionLogFrame.VIEW_MODE.DAY] = "ui_view_day",
+    [RmTransactionLogFrame.VIEW_MODE.PERIOD] = "ui_view_period",
+    [RmTransactionLogFrame.VIEW_MODE.YEAR] = "ui_view_year",
+}
+
+-- Session view mode: MODULE-LEVEL state (default Individual), remembered across dialog open/close for the
+-- process because INSTANCE is created once and reused. NOT persisted to disk - a mid-session load of
+-- another save keeps it; a game restart resets it to Individual. onOpen READS it, never resets it.
+RmTransactionLogFrame.viewMode = RmTransactionLogFrame.VIEW_MODE.INDIVIDUAL
 
 ---Creates a new RmTransactionLogFrame instance
 ---@param target table|nil the target object
@@ -63,19 +106,188 @@ function RmTransactionLogFrame:onCreate()
     RmTransactionLogFrame:superClass().onCreate(self)
 end
 
----Builds the GUI display list for a farm: the farm-filtered rows newest-first, plus the spectator
----flag. PURE (no self / no GUI framework), so the load-bearing logic - filter applied, sort order,
----hint decision - is unit-tested on real code. onOpen is a thin apply over this.
+---Truncates a stored ingameDateTime ("YYYY-MM-DD HH:MM") to the bucket prefix for a COMBINED view mode.
+---Pure and raise-free: a non-string dt, or an Individual/unknown mode (no length in VIEW_MODE_DATE_LEN),
+---returns dt UNCHANGED. The stored string is already the calendar-projected date (the mod rolls the year
+---in March, so Jan/Feb rows carry the next stored YYYY) - truncation needs no extra date maths.
+---@param ingameDateTime any the stored datetime (normally a string; guarded for non-string)
+---@param viewMode string one of RmTransactionLogFrame.VIEW_MODE
+---@return any truncated the Day(10)/Period(7)/Year(4) prefix, or dt unchanged
+function RmTransactionLogFrame.truncateDateTime(ingameDateTime, viewMode)
+    local len = RmTransactionLogFrame.VIEW_MODE_DATE_LEN[viewMode]
+    if len ~= nil and type(ingameDateTime) == "string" then
+        return string.sub(ingameDateTime, 1, len)
+    end
+    return ingameDateTime
+end
+
+-- Collision-safe length-prefixed segment, mirroring RmTransactionBatcher.createBatchKey's `seg`: "" and
+-- nil both collapse to "0:", and the length prefix means no value (an embedded "|"/":", or the literal
+-- "nil") can alias a different composite into the same key. Kept private to this file.
+local function keySegment(v)
+    v = (v ~= nil and v ~= "") and tostring(v) or ""
+    return string.format("%d:%s", #v, v)
+end
+
+-- Identity-dominant component: a stable id wins, else the name snapshot, else "" (absent). "" and nil key
+-- identically (matching the row-level normalization), so a same-name/both-nil-id pair merges - it is
+-- indistinguishable anyway - while distinct ids never merge even under equal names. Mirrors createBatchKey's
+-- id-dominant location idiom; full same-name disambiguation is TL-30.
+local function identityComponent(id, name)
+    if id ~= nil and id ~= "" then return tostring(id) end
+    if name ~= nil and name ~= "" then return tostring(name) end
+    return ""
+end
+
+---Aggregates already-farm-filtered rows into one synthetic display row per
+---(truncatedDate, statistic, subject-identity, location-identity) group, for a COMBINED view mode
+---(Day/Period/Year). Individual mode is handled by the caller, never here. NOT pure in the strict sense:
+---it reads RmTransactionLog.resolveStatistic (g_i18n) ONLY to build the Type SORT key, so a locale switch
+---re-sorts but never re-buckets (grouping stays on the raw `statistic`). Defensive and raise-free on
+---malformed rows (they degrade, they do not crash the open).
+---
+---Each returned synthetic row carries the fields populateCellForItemInSection reads - ingameDateTime
+---(truncated), statistic, amount (2dp net sum), subjectName, locationName, comment="", currentFarmBalance
+---(the bucket's CLOSING balance) - PLUS showBalance (bool). It carries NO id (aggregate rows are
+---display-only; the action handlers bail in combined modes and selection is reset).
+---
+---Ordering: outer buckets by truncatedDate DESCENDING (lexicographic == chronological on the zero-padded
+---format; a non-string / empty date buckets as "" and sorts last); inner rows by a strict TOTAL-order
+---content key (resolveStatistic lower, subjectName lower, locationName lower, then the raw group key). The
+---balance VALUE is the bucket's closing balance (currentFarmBalance of the newest (ingameDateTime, id) txn
+---in that DATE bucket); its PLACEMENT is the bucket's topmost total-order row only (value and placement are
+---decoupled by design). Every other row in the bucket gets showBalance=false.
+---@param rows table|nil the farm-filtered rows
+---@param viewMode string one of DAY / PERIOD / YEAR
+---@return table aggregated synthetic display rows, ordered bucket-desc then inner total-order
+function RmTransactionLogFrame.aggregateByTimeframe(rows, viewMode)
+    -- groups[compositeKey] = accumulated synthetic row; bucketClose[truncatedDate] = { dt, id, balance }
+    -- of the newest transaction seen in that DATE bucket (across all its groups).
+    local groups = {}
+    local order = {}          -- insertion order of group keys (stable base before sorting)
+    local bucketClose = {}
+
+    for _, r in ipairs(rows or {}) do
+        local dt = r.ingameDateTime
+        -- Bucket date is ALWAYS a string: a non-string dt truncates to "" (sorts last), never raising in
+        -- the string comparators below.
+        local truncated = RmTransactionLogFrame.truncateDateTime(dt, viewMode)
+        if type(truncated) ~= "string" then
+            truncated = ""
+        end
+
+        local subjectComponent = identityComponent(r.subjectId, r.subjectName)
+        local locationComponent = identityComponent(r.locationId, r.locationName)
+        local statisticKey = r.statistic
+        local compositeKey = keySegment(truncated) .. keySegment(statisticKey)
+            .. keySegment(subjectComponent) .. keySegment(locationComponent)
+
+        local group = groups[compositeKey]
+        if group == nil then
+            group = {
+                ingameDateTime = truncated,
+                truncatedDate = truncated,
+                statistic = statisticKey,
+                subjectName = r.subjectName,
+                locationName = r.locationName,
+                comment = "",
+                amount = 0,
+                groupKey = compositeKey,
+                -- Precomputed strict-total-order sort keys (computed ONCE per group, not per comparator
+                -- call). resolveStatistic reads g_i18n; subject/location use the raw name snapshots.
+                typeSort = string.lower(RmTransactionLog.resolveStatistic(statisticKey) or ""),
+                subjectSort = string.lower(r.subjectName or ""),
+                locationSort = string.lower(r.locationName or ""),
+            }
+            groups[compositeKey] = group
+            order[#order + 1] = group
+        end
+        -- Net sum; a nil amount contributes 0.
+        group.amount = group.amount + (r.amount or 0)
+
+        -- Track the DATE bucket's closing balance = the newest (ingameDateTime, id) transaction's balance.
+        -- Compare on the RAW full datetime (guarded to "" for non-string), then id. On a FULL (dt, id) tie
+        -- (e.g. two nil-id rows both coercing to 0) the strict `>` keeps the FIRST-seen row's balance, i.e.
+        -- master insertion order - stable because filterTransactionsByFarm preserves the master's
+        -- ascending-id order.
+        local rowDt = type(dt) == "string" and dt or ""
+        local rowId = r.id or 0
+        local close = bucketClose[truncated]
+        if close == nil or rowDt > close.dt or (rowDt == close.dt and rowId > close.id) then
+            bucketClose[truncated] = { dt = rowDt, id = rowId, balance = r.currentFarmBalance or 0 }
+        end
+    end
+
+    -- Round each net sum to 2dp, mirroring RmTransactionLog.logTransaction's amount rounding, so float drift
+    -- never shows e.g. -149.99999. Also stamp each group with its bucket's closing balance (value only;
+    -- placement is decided after sorting).
+    for _, group in ipairs(order) do
+        group.amount = math.floor(group.amount * 100 + 0.5) / 100
+        local close = bucketClose[group.truncatedDate]
+        group.currentFarmBalance = close ~= nil and close.balance or 0
+    end
+
+    -- Order: outer bucket DESC, then the strict total-order inner content key. The raw group-key tail makes
+    -- the comparator a strict total order even when two distinct statistic keys resolve to the same Type
+    -- text, so a line holds the same slot in every bucket.
+    table.sort(order, function(a, b)
+        if a.truncatedDate ~= b.truncatedDate then
+            return a.truncatedDate > b.truncatedDate
+        end
+        if a.typeSort ~= b.typeSort then
+            return a.typeSort < b.typeSort
+        end
+        if a.subjectSort ~= b.subjectSort then
+            return a.subjectSort < b.subjectSort
+        end
+        if a.locationSort ~= b.locationSort then
+            return a.locationSort < b.locationSort
+        end
+        return a.groupKey < b.groupKey
+    end)
+
+    -- Mark the balance placement: only the first (topmost total-order) row of each DATE bucket shows it.
+    local seenBucket = {}
+    for _, group in ipairs(order) do
+        group.showBalance = seenBucket[group.truncatedDate] ~= true
+        seenBucket[group.truncatedDate] = true
+    end
+
+    return order
+end
+
+---Builds the GUI display list for a farm: the farm-filtered rows for the given view mode, plus the
+---spectator flag. PURE (no self / no GUI framework), so the load-bearing logic - filter applied, sort
+---order / aggregation, hint decision - is unit-tested on real code. onOpen/refreshData are a thin apply
+---over this.
 ---@param transactions table|nil the master transaction list
 ---@param farmId number|nil the viewing farm (0 = spectator, nil = no local player)
----@return table rows farm-filtered rows sorted newest-first (ingameDateTime desc, id desc)
+---@param viewMode string|nil one of VIEW_MODE (default Individual)
+---@return table rows Individual: farm-filtered rows newest-first (ingameDateTime desc, id desc); combined:
+---                  aggregated synthetic rows
 ---@return boolean isSpectator true when farmId is the spectator farm (0)
-function RmTransactionLogFrame.buildDisplayList(transactions, farmId)
+---@return number sourceCount the count of UNDERLYING farm-filtered transactions (BEFORE any aggregation),
+---                  so the "Total Transactions" footer stays honest in a combined mode (where #rows is the
+---                  bucket count, not the transaction count). Equals #rows in Individual mode.
+function RmTransactionLogFrame.buildDisplayList(transactions, farmId, viewMode)
+    viewMode = viewMode or RmTransactionLogFrame.VIEW_MODE.INDIVIDUAL
+
     -- Same-reference rows (an id-resolved comment edit still lands on the master); a fresh array so
     -- sorting never scrambles the master's insertion (= ascending-id) order.
     local rows = RmTransactionLog.filterTransactionsByFarm(transactions, farmId)
+    local isSpectator = farmId == RmTransactionLogFrame.SPECTATOR_FARM_ID
+    -- The true underlying transaction count for the footer, captured BEFORE a combined mode collapses the
+    -- rows into buckets.
+    local sourceCount = #rows
 
-    -- Newest first; deterministic within an equal minute by descending id.
+    if viewMode ~= RmTransactionLogFrame.VIEW_MODE.INDIVIDUAL then
+        -- Combined mode: collapse into one synthetic row per timeframe/type/subject/location bucket. The
+        -- spectator flag AND the pre-aggregation source count are STILL returned so the caller's hint logic
+        -- and the "Total Transactions" footer stay correct.
+        return RmTransactionLogFrame.aggregateByTimeframe(rows, viewMode), isSpectator, sourceCount
+    end
+
+    -- Individual mode (unchanged): newest first; deterministic within an equal minute by descending id.
     table.sort(rows, function(a, b)
         local ad, bd = a.ingameDateTime or "", b.ingameDateTime or ""
         if ad ~= bd then
@@ -84,7 +296,7 @@ function RmTransactionLogFrame.buildDisplayList(transactions, farmId)
         return (a.id or 0) > (b.id or 0)
     end)
 
-    return rows, farmId == RmTransactionLogFrame.SPECTATOR_FARM_ID
+    return rows, isSpectator, sourceCount
 end
 
 ---Resolves the spectator-hint text, hasText-guarded so a missing key (non-English locale) renders
@@ -108,11 +320,14 @@ function RmTransactionLogFrame:refreshData()
     -- whose master holds every farm. In SP getFarmId() is 1 and only farm 1 exists, so the filter
     -- is a no-op.
     local myFarmId = g_currentMission ~= nil and g_currentMission:getFarmId() or nil
-    local rows, isSpectator = RmTransactionLogFrame.buildDisplayList(RmTransactionLog.transactions, myFarmId)
+    local rows, isSpectator, sourceCount = RmTransactionLogFrame.buildDisplayList(
+        RmTransactionLog.transactions, myFarmId, RmTransactionLogFrame.viewMode)
     self.transactions = rows
 
-    -- Update total transactions display
-    self.totalTransactionsValue:setText(tostring(#self.transactions))
+    -- Update total transactions display. Show the UNDERLYING transaction count (buildDisplayList's 3rd
+    -- return), NOT #self.transactions: in a combined mode the latter is the bucket count, which would
+    -- mislabel the fixed "Total Transactions" footer. In Individual mode the two are equal.
+    self.totalTransactionsValue:setText(tostring(sourceCount or #self.transactions))
 
     -- Spectator hint: shown only when the viewer is not in a farm (farm 0). A farm member with zero
     -- rows sees the normal empty table, no hint. Nil-guarded like RmCommentInputDialog's button
@@ -138,29 +353,11 @@ function RmTransactionLogFrame:onOpen()
     -- name field (a dialog never sets currentGuiName).
     self.isLogOpen = true
 
-    -- Role-gate the manager-only actions (TL-13): show Add Comment + Export only to a farm manager,
-    -- hide them for a worker / spectator. In SP + on the listen-host the local player always resolves
-    -- as a manager, so both stay visible (no SP regression). The button gate is UX; the server is the
-    -- security boundary for the edit. setVisible(isManager) also re-shows on a later open of this
-    -- reused instance. Nil-guarded like the emptyHintText binding: a nil control is a fat-fingered id.
-    local isManager = RmTransactionLog.isLocalPlayerFarmManager()
-    if self.buttonAddComment ~= nil then
-        self.buttonAddComment:setVisible(isManager)
-    end
-    if self.buttonExportCSV ~= nil then
-        self.buttonExportCSV:setVisible(isManager)
-    end
-
-    -- Admin-gate the destructive Clear Log (TL-15): show it only to an admin (master user), hide it for a
-    -- worker / member / spectator. This CLOSES the TL-13 interim hazard (a non-manager kept a destructive
-    -- Clear Log). Deliberately a separate gate from the manager one above: clearing is a whole-log
-    -- (all-farms) master-user action, not a per-farm manager action. On SP + the listen-host getIsServer()
-    -- is true, so it stays visible (no SP regression). Nil-guarded like the sibling buttons; the button gate
-    -- is UX - the server master-user check is the security boundary.
-    local isAdmin = RmTransactionLog.isLocalPlayerAdmin()
-    if self.buttonClearLog ~= nil then
-        self.buttonClearLog:setVisible(isAdmin)
-    end
+    -- Apply the action-button gating for the current (READ, not reset) session view mode, and set the
+    -- cycle-button label to match. In a combined mode the three action buttons are hidden regardless of
+    -- role; in Individual they follow today's manager/admin gating.
+    self:updateActionButtonVisibility()
+    self:updateCycleButtonLabel()
 
     self:refreshData()
 
@@ -175,6 +372,82 @@ function RmTransactionLogFrame:onClose()
     self.isLogOpen = false
     self.transactions = {}
     RmTransactionLogFrame:superClass().onClose(self)
+end
+
+---Applies the action-button visibility for the current session view mode, then re-flows the button box.
+---Add Comment / Export / Clear Log show ONLY in Individual mode AND with today's manager/admin gating;
+---they hide in every combined mode. In SP + on the listen-host the local player resolves as manager/admin
+---so Individual mode is unchanged from today. Each button is nil-guarded (a nil binding is a fat-fingered
+---control id). The button box does not re-flow on its own when a child's visibility changes, so a
+---mid-session toggle must invalidate the id'd box explicitly or the remaining buttons keep their old slots.
+function RmTransactionLogFrame:updateActionButtonVisibility()
+    local isIndividual = RmTransactionLogFrame.viewMode == RmTransactionLogFrame.VIEW_MODE.INDIVIDUAL
+    local isManager = RmTransactionLog.isLocalPlayerFarmManager()
+    local isAdmin = RmTransactionLog.isLocalPlayerAdmin()
+
+    if self.buttonAddComment ~= nil then
+        self.buttonAddComment:setVisible(isIndividual and isManager)
+    end
+    if self.buttonExportCSV ~= nil then
+        self.buttonExportCSV:setVisible(isIndividual and isManager)
+    end
+    if self.buttonClearLog ~= nil then
+        self.buttonClearLog:setVisible(isIndividual and isAdmin)
+    end
+
+    if self.buttonBox ~= nil then
+        self.buttonBox:invalidateLayout()
+    end
+end
+
+---Sets the cycle-button text to "View: <mode name>" for the current session view mode. Nil-guarded (the
+---button may be absent on a fat-fingered id). pcall-guards the format against a malformed
+---ui_button_cycle_view translation in a non-English locale (mirrors onClickAddComment's prompt guard).
+function RmTransactionLogFrame:updateCycleButtonLabel()
+    if self.buttonCycleView == nil then
+        return
+    end
+    local modeKey = RmTransactionLogFrame.VIEW_MODE_LABEL_KEY[RmTransactionLogFrame.viewMode]
+        or RmTransactionLogFrame.VIEW_MODE_LABEL_KEY[RmTransactionLogFrame.VIEW_MODE.INDIVIDUAL]
+    -- g_i18n nil-guard, matching resolveSpectatorHint's convention: fall back to the raw mode key so a
+    -- missing g_i18n (or a getText raise) never crashes onOpen. In normal play g_i18n is always present.
+    if g_i18n == nil then
+        self.buttonCycleView:setText(modeKey)
+        return
+    end
+    local modeName = g_i18n:getText(modeKey)
+    local ok, label = pcall(string.format, g_i18n:getText("ui_button_cycle_view"), modeName)
+    self.buttonCycleView:setText(ok and label or modeName)
+end
+
+---Advances the session view mode along VIEW_MODE_ORDER (Individual -> Day -> Period -> Year -> wrap),
+---relabels the button, re-applies action-button visibility, resets the list selection, and repaints. The
+---mode is MODULE-LEVEL so it survives dialog re-open. Returns true to mark the input event consumed.
+function RmTransactionLogFrame:onClickCycleView()
+    Log:trace("RmTransactionLogFrame:onClickCycleView()")
+
+    local order = RmTransactionLogFrame.VIEW_MODE_ORDER
+    local currentIndex = nil
+    for i = 1, #order do
+        if order[i] == RmTransactionLogFrame.viewMode then
+            currentIndex = i
+            break
+        end
+    end
+    -- Advance with wrap; a viewMode somehow absent from the order falls back to the first entry (Individual).
+    local nextIndex = (currentIndex ~= nil) and ((currentIndex % #order) + 1) or 1
+    RmTransactionLogFrame.viewMode = order[nextIndex]
+
+    self:updateCycleButtonLabel()
+    self:updateActionButtonVisibility()
+
+    -- Reset selection to the top: the row count AND meaning change with the mode, so a carried selectedIndex
+    -- could address a row that no longer exists. reloadData (via refreshData) re-clamps; 1 matches the
+    -- SmoothList default. Aggregate rows carry no id, so they are never edit-addressable regardless.
+    self.transactionTable.selectedIndex = 1
+    self:refreshData()
+
+    return true
 end
 
 -- Table data source methods
@@ -251,17 +524,23 @@ function RmTransactionLogFrame:populateCellForItemInSection(list, section, index
                 amountElement.textColor = RmTransactionLogFrame.NEGATIVE_COLOR
             end
 
-            -- Format and display farm balance
-            local balance = transaction.currentFarmBalance or 0
-            local balanceText = string.format("%.2f", balance)
+            -- Format and display farm balance. In a combined view a bucket shows its CLOSING balance ONCE,
+            -- on its topmost row (showBalance); the rest set showBalance=false. SmoothList RECYCLES cell
+            -- instances, so BOTH the text AND the color must be set on EVERY render, on BOTH branches - else
+            -- a blanked row would keep a stale colored balance from the row previously painted into that cell.
+            -- Individual rows carry no showBalance (nil), so they always show the balance (unchanged).
             local balanceElement = cell:getAttribute("balance")
-            balanceElement:setText(balanceText)
-
-            -- Set color based on positive/negative balance
-            if balance >= 0 then
+            if transaction.showBalance == false then
+                balanceElement:setText("")
                 balanceElement.textColor = RmTransactionLogFrame.POSITIVE_COLOR
             else
-                balanceElement.textColor = RmTransactionLogFrame.NEGATIVE_COLOR
+                local balance = transaction.currentFarmBalance or 0
+                balanceElement:setText(string.format("%.2f", balance))
+                if balance >= 0 then
+                    balanceElement.textColor = RmTransactionLogFrame.POSITIVE_COLOR
+                else
+                    balanceElement.textColor = RmTransactionLogFrame.NEGATIVE_COLOR
+                end
             end
 
             cell:getAttribute("comment"):setText(RmTransactionLogFrame.formatEnrichedComment(transaction))
@@ -278,6 +557,14 @@ end
 ---Shows dialog to add/edit comment for selected transaction
 function RmTransactionLogFrame:onClickAddComment()
     Log:trace("RmTransactionLogFrame:onClickAddComment()")
+
+    -- Defense-in-depth (TL-49): Add Comment is meaningless on aggregate rows (they carry no id), and the
+    -- button is hidden in combined modes, but a focus/selection path or future refactor could still reach
+    -- the handler - bail unless in Individual mode.
+    if RmTransactionLogFrame.viewMode ~= RmTransactionLogFrame.VIEW_MODE.INDIVIDUAL then
+        Log:debug("onClickAddComment: not in Individual view mode; ignoring")
+        return
+    end
 
     -- Re-check the role gate at entry (TL-13): the button is hidden for a non-manager, but a keybind
     -- or focus path could still reach the handler, so bail defensively. The server re-validates the
@@ -338,6 +625,13 @@ end
 function RmTransactionLogFrame:onClickClearLog()
     Log:trace("RmTransactionLogFrame:onClickClearLog()")
 
+    -- Defense-in-depth (TL-49): Clear Log is hidden in combined modes; bail unless in Individual mode so a
+    -- stray focus/keybind path cannot reach the destructive confirm from an aggregate view.
+    if RmTransactionLogFrame.viewMode ~= RmTransactionLogFrame.VIEW_MODE.INDIVIDUAL then
+        Log:debug("onClickClearLog: not in Individual view mode; ignoring")
+        return
+    end
+
     -- Re-check the admin gate at entry (TL-15): the button is hidden for a non-admin, but a keybind or
     -- focus path could still reach the handler, so bail defensively before the confirm dialog. Mirrors
     -- onClickAddComment / onClickExportCSV. The server re-validates the actual clear; this is client-side
@@ -377,6 +671,13 @@ end
 ---Exports all transactions to a CSV file
 function RmTransactionLogFrame:onClickExportCSV()
     Log:trace("RmTransactionLogFrame:onClickExportCSV()")
+
+    -- Defense-in-depth (TL-49): Export stays raw individual rows and is hidden in combined modes; bail
+    -- unless in Individual mode so an aggregate view never triggers an export.
+    if RmTransactionLogFrame.viewMode ~= RmTransactionLogFrame.VIEW_MODE.INDIVIDUAL then
+        Log:debug("onClickExportCSV: not in Individual view mode; ignoring")
+        return
+    end
 
     -- Re-check the role gate at entry (TL-13): the button is hidden for a non-manager, but a keybind
     -- or focus path could still reach the handler, so bail defensively. Export is client-local; this
