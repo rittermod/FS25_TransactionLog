@@ -1493,6 +1493,212 @@ function RmTransactionLog.installBuyingStationCaptureHook()
 end
 
 -- ============================================================
+-- Husbandry auto-water subject + location capture (TL-45 subject / TL-47 location): the mod's FIRST
+-- SPEC-REGISTERED overwrite. Automatic water supply for an animal husbandry charges MoneyType.PURCHASE_WATER
+-- on each HOURLY feeding sweep (PlaceableHusbandryWater:updateFeeding, when spec.automaticWaterSupply is on),
+-- recording neither WHAT nor WHERE. This arms subject = WATER (from spec.fillType) AND location = the owning
+-- husbandry as ONE pending context immediately before forwarding to the base, so the base's own addMoney ->
+-- changeFarmBalance consumes it and the (batchable purchaseWater) row carries both dimensions. Because
+-- updateFeeding is a SPEC-OVERWRITTEN function (registered via SpecializationUtil.registerOverwrittenFunction,
+-- NOT a plain class method like TL-27/28), the hook installs by APPENDING to
+-- PlaceableHusbandryWater.registerOverwrittenFunctions and registering our RAW hook there (see
+-- installHusbandryWaterCaptureHook). The other three deferred TL-45 sites (Motorized fuel, Sprayer market-buy,
+-- SowingMachine seeds) each need a full body reimplementation and stay deferred.
+-- ============================================================
+
+-- One-shot install guard: set true once our appended registrar is added to registerOverwrittenFunctions, so a
+-- second install call (a stray re-source or a test) never stacks a second appended body on the shared
+-- PlaceableHusbandryWater.registerOverwrittenFunctions chain. A target absent at first call leaves it false so
+-- a later call re-wraps (NO permanent lockout).
+RmTransactionLog.husbandryWaterHookInstalled = false
+
+---Resolve an animal husbandry's WHERE (location) to a placeable id + display-name snapshot. PURE and
+---RAISE-FREE BY CONSTRUCTION -- this runs inside the updateFeeding overwrite, and a raise there would break
+---animal feeding -- so every access is type()/callability-guarded and there is NO pcall. Returns two VALUE
+---snapshots (plain strings copied at call time, retaining NO reference to the placeable), so a placeable
+---deleted before the batch flush cannot cause a stale deref. Unlike resolveSellingStationLocation /
+---resolveProductionLocation the placeable IS `self` (the husbandry itself), so there is no owningPlaceable
+---indirection; and Placeable:getName() returns only the usually-nil player-set custom name, so the name falls
+---back to self.storeItem.name (the shop name, e.g. "Cow Barn") to give an un-renamed barn a readable WHERE.
+---@param placeable table|nil the husbandry placeable (self)
+---@return string|nil locationId the placeable's uniqueId (nil when absent / not-yet-saved / empty)
+---@return string|nil locationName the custom name, else the shop name, else nil
+function RmTransactionLog.resolveHusbandryLocation(placeable)
+    if type(placeable) ~= "table" then
+        return nil, nil
+    end
+
+    local locationId = nil
+    if type(placeable.getUniqueId) == "function" then
+        local uid = placeable:getUniqueId()
+        if type(uid) == "string" and uid ~= "" then
+            locationId = uid
+        end
+    end
+
+    local locationName = nil
+    -- Primary: the player-set custom name (Placeable:getName() -> self.nameCustom, usually nil).
+    if type(placeable.getName) == "function" then
+        local name = placeable:getName()
+        if type(name) == "string" and name ~= "" then
+            locationName = name
+        end
+    end
+    -- Fallback: the shop name (self.storeItem.name), so an un-renamed barn still has a readable WHERE.
+    if locationName == nil and type(placeable.storeItem) == "table" then
+        local shopName = placeable.storeItem.name
+        if type(shopName) == "string" and shopName ~= "" then
+            locationName = shopName
+        end
+    end
+
+    return locationId, locationName
+end
+
+---Build the enrichment context (subject + location) for one husbandry auto-water charge. RAISE-FREE: the
+---fill-type lookup is hardened (a truthy non-table manager, a non-function method, or a non-table desc
+---nil-degrades the subject WITHOUT dropping the location, and vice-versa -- the two dimensions are
+---orthogonal). The subject is the charged WATER fill type: subjectId = its stable key (.name), subjectName =
+---its localized title, subjectKind = the exact seed "fillType"; each field nil-normalizes downstream if the
+---desc lacks it. The location is the owning husbandry (self) via resolveHusbandryLocation. Always returns a
+---record (any field may be nil); an all-nil record is harmless (consumed + cleared exactly like no set).
+---@param placeable table|nil the husbandry placeable (self; for the location)
+---@param spec table|nil the husbandryWater spec (spec.fillType is the charged WATER fill-type index)
+---@return table context a record {subjectId, subjectName, subjectKind, locationId, locationName}
+function RmTransactionLog.buildHusbandryWaterContext(placeable, spec)
+    local subjectId, subjectName, subjectKind = nil, nil, nil
+    local fillTypeIndex = (type(spec) == "table") and spec.fillType or nil
+    if fillTypeIndex ~= nil
+        and type(g_fillTypeManager) == "table"
+        and type(g_fillTypeManager.getFillTypeByIndex) == "function" then
+        local fillType = g_fillTypeManager:getFillTypeByIndex(fillTypeIndex)
+        if type(fillType) == "table" then
+            subjectId = fillType.name
+            subjectName = fillType.title
+            subjectKind = "fillType"
+        end
+    end
+
+    local locationId, locationName = RmTransactionLog.resolveHusbandryLocation(placeable)
+
+    return {
+        subjectId = subjectId,
+        subjectName = subjectName,
+        subjectKind = subjectKind,
+        locationId = locationId,
+        locationName = locationName,
+    }
+end
+
+---Arm the pending context for a husbandry auto-water charge, IFF the base will actually charge. Reads the
+---PER-INSTANCE spec fields the charge itself depends on -- self.isServer AND type(spec)=="table" AND
+---0 < spec.litersPerHour AND spec.automaticWaterSupply -- NOT the global g_server, so the armed context is
+---consumed by the immediately-following credit and never leaks. updateFeeding runs on each hourly feeding
+---sweep and mostly does NOT charge (manual water mode, or no thirsty animals -> litersPerHour 0); an
+---unconditional arm would leak context onto the next unrelated changeBalance. type(spec)=="table" is proven
+---BEFORE any spec. deref (raise-free). Then guard getOwnerFarmId's callability and leak-guard
+---self:getOwnerFarmId() with changeFarmBalance's EXACT reject range (type ~= number / <= 0 / > MAX_NUM_FARMS --
+---covers spectator 0, reserved 14/15), as the TL-27 BuyingStation and TL-46 claim-cost hooks replicate:
+---addMoney does not credit changeBalance for such a farm, so arming for it would leak. A valid-range but
+---not-yet-registered id (a mid-deletion race) is NOT caught here; that charge likewise never reaches
+---changeBalance, leaving the same bounded, self-healing one-row residual the sibling hooks document. RAISE-FREE
+---(no pcall): a raise inside updateFeeding would break animal feeding. Server-authority is enforced ONCE, at
+---setPendingContext (g_server-guarded); the self.isServer gate already implies it on the charge path.
+---@param self table the husbandry placeable (the overwritten self)
+function RmTransactionLog.armHusbandryWaterContext(self)
+    -- Arm only when the charge will actually happen, reading the PER-INSTANCE spec fields the charge depends on
+    -- (NOT global g_server): a server-side husbandry in automatic-water mode with thirsty animals
+    -- (litersPerHour > 0). type(self)=="table" leads the chain so self.isServer / self.spec_* cannot raise;
+    -- type(spec)=="table" precedes any spec. deref.
+    local spec = (type(self) == "table") and self.spec_husbandryWater or nil
+    if not (type(self) == "table"
+        and self.isServer
+        and type(spec) == "table"
+        and type(spec.litersPerHour) == "number"
+        and 0 < spec.litersPerHour
+        and spec.automaticWaterSupply) then
+        return
+    end
+    -- Leak guard: mirror changeFarmBalance's reject range EXACTLY (type-guarded <= 0 OR > MAX_NUM_FARMS). A
+    -- spectator (farm 0), reserved (14/15), invalid, or non-number owner -- none actually credited -- cannot
+    -- arm a leak. getOwnerFarmId callability is guarded first so a methodless self degrades, not raises.
+    if type(self.getOwnerFarmId) ~= "function" then
+        return
+    end
+    local ownerFarmId = self:getOwnerFarmId()
+    if type(ownerFarmId) ~= "number" or ownerFarmId <= 0 or ownerFarmId > FarmManager.MAX_NUM_FARMS then
+        return
+    end
+    Log:trace("armHusbandryWaterContext: ownerFarmId=%s fillType=%s",
+        tostring(ownerFarmId), tostring(spec.fillType))
+    RmTransactionLog.setPendingContext(RmTransactionLog.buildHusbandryWaterContext(self, spec))
+end
+
+---Spec-overwrite hook for PlaceableHusbandryWater:updateFeeding, registered as the RAW function via
+---SpecializationUtil.registerOverwrittenFunction (which wraps it with Utils.overwrittenFunction, handing us
+---superFunc = the base water-charging updateFeeding). Arms the WATER subject + husbandry location (via
+---armHusbandryWaterContext) BEFORE forwarding to the base, then `return superFunc(self, ...)` UNCHANGED --
+---updateFeeding returns a feeding `factor` the caller consumes, so a discarded return would corrupt feeding
+---(the same load-bearing-return reason TL-27 used overwrittenFunction, not a bare prepend). `...` is always
+---empty (base updateFeeding takes no extra args) but is forwarded defensively.
+---@param self table the husbandry placeable
+---@param superFunc function the base (water-charging) updateFeeding
+---@return number factor the feeding factor, forwarded unchanged
+function RmTransactionLog.hookHusbandryWaterUpdateFeeding(self, superFunc, ...)
+    RmTransactionLog.armHusbandryWaterContext(self)
+    return superFunc(self, ...)
+end
+
+---Install the husbandry auto-water capture ONCE, at file scope. Because updateFeeding is a SPEC-OVERWRITTEN
+---function, we cannot reassign a plain class field (as TL-27/28 do); instead we APPEND to
+---PlaceableHusbandryWater.registerOverwrittenFunctions (via Utils.appendedFunction), so that for every
+---husbandry-water TYPE finalized, our appended body registers OUR raw hook onto that type's updateFeeding
+---chain via SpecializationUtil.registerOverwrittenFunction. Register the RAW hook (NOT pre-wrapped with
+---Utils.overwrittenFunction): registerOverwrittenFunction itself wraps it, handing our hook
+---superFunc = the base water-charging updateFeeding; pre-wrapping would double-wrap and execute the water
+---charge TWICE per sweep. The chaining precondition holds: registerOverwrittenFunction chains only when the
+---type already has functions.updateFeeding, TypeManager:finalizeTypes runs registerFunctions (which populates
+---it) as an EARLIER subtask than registerOverwrittenFunctions, and appendedFunction runs the base registrar
+---FIRST, then ours -- so at our register call functions.updateFeeding is non-nil and our hook chains correctly
+---(see the spec's Design Notes).
+---
+---Idempotent + presence-guarded, NO permanent lockout: sets the flag only AFTER appending, so a target absent
+---at first call is still wrapped on a later call; a second call once appended is a silent no-op. Logs a
+---WARNING and skips when PlaceableHusbandryWater, its registerOverwrittenFunctions,
+---SpecializationUtil.registerOverwrittenFunction, Utils.appendedFunction, or Utils.overwrittenFunction is
+---absent (degrade-not-break: the mod still loads; husbandry auto-water rows just record no subject/location).
+---`Utils.overwrittenFunction` is checked even though this function does not call it directly: the appended
+---registrar's `SpecializationUtil.registerOverwrittenFunction` calls it TRANSITIVELY when a type finalizes, so
+---gating on it here keeps the "declare installed" promise honest - otherwise a drifted env missing only
+---`overwrittenFunction` would report a successful install and then raise mid-finalize (breaking degrade-not-break).
+---@return boolean installedThisCall true if this call appended the registrar, false if already installed or skipped
+function RmTransactionLog.installHusbandryWaterCaptureHook()
+    if RmTransactionLog.husbandryWaterHookInstalled then
+        return false
+    end
+    if type(PlaceableHusbandryWater) ~= "table"
+        or type(PlaceableHusbandryWater.registerOverwrittenFunctions) ~= "function"
+        or type(SpecializationUtil) ~= "table"
+        or type(SpecializationUtil.registerOverwrittenFunction) ~= "function"
+        or type(Utils) ~= "table"
+        or type(Utils.appendedFunction) ~= "function"
+        or type(Utils.overwrittenFunction) ~= "function" then
+        Log:warning("PlaceableHusbandryWater.registerOverwrittenFunctions / SpecializationUtil / "
+            .. "Utils.overwrittenFunction unavailable; husbandry auto-water subject+location capture disabled")
+        return false
+    end
+    PlaceableHusbandryWater.registerOverwrittenFunctions = Utils.appendedFunction(
+        PlaceableHusbandryWater.registerOverwrittenFunctions,
+        function(placeableType)
+            SpecializationUtil.registerOverwrittenFunction(
+                placeableType, "updateFeeding", RmTransactionLog.hookHusbandryWaterUpdateFeeding)
+        end)
+    RmTransactionLog.husbandryWaterHookInstalled = true
+    Log:debug("Installed PlaceableHusbandryWater.updateFeeding subject+location-capture overwrite (spec-registered)")
+    return true
+end
+
+-- ============================================================
 -- Settings change transport (TL-14): server-authoritative apply + persist + broadcast,
 -- with join-time settings sync. The GUI calls requestSettingChange; the server is the boundary.
 -- ============================================================
@@ -2492,6 +2698,16 @@ RmTransactionLog.installProductionClaimCostHook()
 -- forwarded (see wrapBuyingStationFill); fuel/seed/fertilizer/water/lime buys at a buying station resolve to subjectKind
 -- "fillType", location left nil (out of scope).
 RmTransactionLog.installBuyingStationCaptureHook()
+
+-- Husbandry auto-water subject + location capture (TL-45 subject / TL-47 location): install the updateFeeding
+-- spec-overwrite once, here at FILE scope. The mod's FIRST spec-registered overwrite: it APPENDS to
+-- PlaceableHusbandryWater.registerOverwrittenFunctions and registers our RAW hook via
+-- SpecializationUtil.registerOverwrittenFunction (NOT a plain class-method reassignment like TL-27/28, and NOT
+-- pre-wrapped -- that would charge water twice). Installing at mod-source time (before finalizeTypes schedules
+-- its subtasks) ensures our appended registrar is present when the registerOverwrittenFunctions subtask drains,
+-- so every finalized husbandry-water TYPE gets our hook. Arms WATER (what) + the owning husbandry (where) on
+-- the ~hourly auto-water charge; return-preserving (updateFeeding returns a feeding factor the caller consumes).
+RmTransactionLog.installHusbandryWaterCaptureHook()
 
 -- Join delivery (TL-11): append the snapshot send onto FSBaseMission.sendInitialClientState at FILE
 -- scope (NOT in loadMap). A class-method hook must be appended ONCE per process; loadMap re-runs per
