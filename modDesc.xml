@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8" standalone="no" ?>
 <modDesc descVersion="110">
     <author>Ritter</author>
-    <version>2.0.0.0-dev.3</version>
+    <version>2.0.0.0-dev.4</version>
     <iconFilename>icon_TransactionLog.dds</iconFilename>
     <title>
         <en>Transaction log</en>

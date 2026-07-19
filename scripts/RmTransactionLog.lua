@@ -250,7 +250,7 @@ function RmTransactionLog.logTransaction(record)
     -- Round to two decimals and get absolute value
     local amount_check = math.abs(math.floor(amount * 100 + 0.5) / 100)
     if amount_check == 0.00 then
-        Log:debug("logTransaction called with amount 0, ignoring transaction")
+        Log:trace("logTransaction called with amount 0, ignoring transaction")
         return
     end
 
@@ -307,7 +307,7 @@ function RmTransactionLog.logTransaction(record)
     }
 
     table.insert(RmTransactionLog.transactions, transaction)
-    Log:info(string.format(
+    Log:debug(string.format(
         "Transaction logged: id=%d | %s %s | Farm ID: %s | Amount: %.2f | Title: %s | Statistic: %s | Constant: %s | Balance: %.2f",
         transaction.id, transaction.realDateTime, transaction.ingameDateTime, transaction.farmId,
         transaction.amount, tostring(transaction.title), tostring(transaction.statistic),
@@ -1255,6 +1255,92 @@ function RmTransactionLog.installProductionDirectSellHooks()
 end
 
 -- ============================================================
+-- Production running-cost location capture (TL-46): a guarded PREPEND on ProductionPoint.claimProductionCosts.
+-- The per-production running cost (MoneyType.PRODUCTION_COSTS, claimed ~hourly) has no fillType, so this arms
+-- the owning production's LOCATION only (WHERE) via setPendingContext immediately before the single addMoney,
+-- so the already-appended changeFarmBalance consumes it and the productionCosts row carries the production. A
+-- PREPEND (not an overwrite like TL-28's per-output loop) fits because claimProductionCosts has a SINGLE
+-- guarded addMoney and its return is unused; arming-only cannot drift from a base body change, only a rename.
+-- REUSES resolveProductionLocation (TL-28). Subject stays nil (a running cost has no fillType). The OTHER
+-- productionCosts source (auto-deliver transfer costs in ProductionChainManager:distributeGoods) credits inside
+-- a loop -> out of scope (a separate backlog), so those stay unattributed.
+-- ============================================================
+
+-- One-shot install guard: set true once the prepend is wrapped, so a second install call (a stray re-source
+-- or a test) never stacks a second prepend on the shared ProductionPoint.claimProductionCosts chain. A target
+-- absent at first call leaves it false so a later call re-wraps (NO permanent lockout).
+RmTransactionLog.productionClaimCostHookInstalled = false
+
+---Prepend callback for ProductionPoint.claimProductionCosts, invoked BEFORE the base runs: arm the owning
+---production's LOCATION (WHERE only -- a running cost has no fillType, so no subject) as the pending context
+---for the (negative) money charge that follows in the same synchronous stack, so the already-appended
+---changeFarmBalance consumes it and the productionCosts row carries the production. RAISE-FREE: every read is
+---type()-guarded (no pcall), because a raise in the prepend would break the real charge.
+---
+---Arm IFF the charge will actually happen: gate on the PER-INSTANCE fields the charge itself depends on
+---(production.isOwned AND production.isServer AND 0 < production.productionCostsToClaim), NOT the global
+---g_server -- so the armed context is consumed by the immediately-following credit and never leaks. The
+---pending-balance field still holds its amount when the prepend runs (it is cleared as the charge is taken).
+---claimProductionCosts runs ~hourly per production and mostly does NOT charge; an unconditional arm would leak
+---a location onto the next unrelated changeBalance.
+---
+---Then leak-guard the owner farm with changeFarmBalance's EXACT reject range (type ~= number / <= 0 / > MAX --
+---covers spectator 0, guided-tour 14, invalid 15), as the TL-27 BuyingStation capture hook also replicates:
+---addMoney does not credit changeBalance for such a farm, so arming for it would leak. A valid-range but
+---not-yet-registered id (getFarmById nil -- a mid-deletion race) is NOT caught here; that charge likewise never
+---reaches changeBalance, leaving the same bounded, self-healing residual armProductionDirectSellContext
+---documents (the next authoritative credit overwrites the holder).
+---Server-authority is enforced ONCE, at setPendingContext (g_server-guarded) -- no duplicate guard here.
+---@param production table|nil the ProductionPoint instance (self; the prepend forwards it)
+function RmTransactionLog.armProductionClaimCostContext(production, ...)
+    -- Arm only when the charge will actually happen, reading the PER-INSTANCE fields the charge depends on (NOT
+    -- global g_server): an owned, server-side production with a positive pending running-cost balance. That
+    -- pending balance is cleared as the charge is taken, so reading it here (before the charge) still sees the
+    -- amount that will be charged.
+    if not (type(production) == "table"
+        and production.isOwned
+        and production.isServer
+        and type(production.productionCostsToClaim) == "number"
+        and production.productionCostsToClaim > 0) then
+        return
+    end
+    -- Leak guard: mirror changeFarmBalance's reject range EXACTLY (type-guarded <= 0 OR > MAX_NUM_FARMS), so a
+    -- spectator (farm 0) / reserved (14/15) / invalid / non-number owner -- none actually credited -- cannot
+    -- arm a leak. ownerFarmId is a per-production field, constant across the single charge, so all-or-nothing.
+    local ownerFarmId = production.ownerFarmId
+    if type(ownerFarmId) ~= "number" or ownerFarmId <= 0 or ownerFarmId > FarmManager.MAX_NUM_FARMS then
+        return
+    end
+    local locationId, locationName = RmTransactionLog.resolveProductionLocation(production)
+    Log:trace("armProductionClaimCostContext: ownerFarmId=%s locationId=%s locationName=%s",
+        tostring(ownerFarmId), tostring(locationId), tostring(locationName))
+    -- Location ONLY -- the three subject fields are omitted (nil): a running cost has no fillType.
+    RmTransactionLog.setPendingContext({ locationId = locationId, locationName = locationName })
+end
+
+---Install the ProductionPoint.claimProductionCosts location-capture prepend ONCE, at file scope. Idempotent +
+---presence-guarded: wraps only when ProductionPoint and its claimProductionCosts method exist AND the hook is
+---not already installed; a second call (a stray re-source or a test) is a silent no-op. Logs a WARNING and
+---skips when the target is absent (degrade-not-break: the mod still loads; production-cost rows just record no
+---location). The flag prevents a self double-wrap; it is not a runtime recovery guarantee (production sources
+---the module once, so a target absent at load stays absent).
+---@return boolean installedThisCall true if this call wrapped the prepend, false if already installed or skipped
+function RmTransactionLog.installProductionClaimCostHook()
+    if RmTransactionLog.productionClaimCostHookInstalled then
+        return false
+    end
+    if type(ProductionPoint) ~= "table" or type(ProductionPoint.claimProductionCosts) ~= "function" then
+        Log:warning("ProductionPoint.claimProductionCosts unavailable; production-cost location capture disabled")
+        return false
+    end
+    ProductionPoint.claimProductionCosts = Utils.prependedFunction(
+        ProductionPoint.claimProductionCosts, RmTransactionLog.armProductionClaimCostContext)
+    RmTransactionLog.productionClaimCostHookInstalled = true
+    Log:debug("Installed ProductionPoint.claimProductionCosts location-capture prepend")
+    return true
+end
+
+-- ============================================================
 -- BuyingStation input-purchase subject capture (TL-27): a RETURN-PRESERVING capture wrap on
 -- BuyingStation.addFillLevelToFillableObject (the mod's SECOND overwrittenFunction site, after TL-28). Arms
 -- the purchased fillType as the subject BEFORE the engine credits the (negative) money, then forwards to the
@@ -1981,9 +2067,9 @@ function RmTransactionLog.changeFarmBalance(self, amount, moneyType, ...)
     end
 
     local currentBalance = self:getBalance()
-    Log:debug(string.format("Current farm balance after change: %.2f", currentBalance))
+    Log:trace(string.format("Current farm balance after change: %.2f", currentBalance))
     local currentEquity = self:getEquity()
-    Log:debug(string.format("Current farm equity before change: %.2f", currentEquity))
+    Log:trace(string.format("Current farm equity before change: %.2f", currentEquity))
 
     -- Derive the stable constant name once; batch/log carry the raw snapshot.
     local constant = RmTransactionLog.getMoneyTypeConstant(moneyType.id)
@@ -2380,6 +2466,12 @@ RmTransactionLog.installShopSubjectHooks()
 -- so a prepend cannot tag each row -- see the block above); each target is presence + dependency gated and
 -- degrades to a clean skip + WARNING.
 RmTransactionLog.installProductionDirectSellHooks()
+
+-- Production running-cost location capture (TL-46): install the claimProductionCosts prepend once, here at
+-- FILE scope (same once-per-process rule as the installers above -- loadMap would stack duplicate prepends),
+-- beside the TL-28 direct-sell overwrite installer. Arms LOCATION only (no subject) on the ~hourly running-cost
+-- charge; a PREPEND fits because claimProductionCosts has a single guarded addMoney with an unused return.
+RmTransactionLog.installProductionClaimCostHook()
 
 -- BuyingStation input-purchase subject capture (TL-27): install the addFillLevelToFillableObject capture wrap
 -- once, here at FILE scope (same once-per-process rule as the installers above -- loadMap would stack

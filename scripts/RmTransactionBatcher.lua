@@ -143,7 +143,7 @@ function RmTransactionBatcher.addToBatch(amount, farmId, moneyType, constant, cu
 
     local batchKey = RmTransactionBatcher.createBatchKey(farmId, moneyType.id, subjectId,
         locationId, locationName)
-    Log:debug(string.format("Adding to batch: %s amount: %s", batchKey, tostring(amount)))
+    Log:trace(string.format("Adding to batch: %s amount: %s", batchKey, tostring(amount)))
 
     -- Look up the existing batch FIRST, so the cap-eviction below can only ever target an OTHER batch.
     local batch = RmTransactionBatcher.transactionBatches[batchKey]
