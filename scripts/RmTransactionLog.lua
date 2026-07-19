@@ -2074,6 +2074,18 @@ function RmTransactionLog.changeFarmBalance(self, amount, moneyType, ...)
     -- Derive the stable constant name once; batch/log carry the raw snapshot.
     local constant = RmTransactionLog.getMoneyTypeConstant(moneyType.id)
 
+    -- Skip an exact no-op credit BEFORE either path (TL-50). A batchable addMoney(0) would otherwise
+    -- spin up an empty batch -- create it, hold the 5s window, then flush a `total: 0` aggregate that
+    -- logTransaction drops -- wasting a MAX_ACTIVE_BATCHES slot and logging noise; a direct 0 was
+    -- already dropped by logTransaction. Exact `== 0` (NOT rounds-to-0) targets ONLY the genuine no-op:
+    -- sub-cent batchable credits still aggregate to a visible row, and logTransaction's rounding filter
+    -- stays the backstop for a batch of real rows that NET to 0. The pending context was already
+    -- consumed at entry, so this early return leaves the holder cleared (no leak).
+    if amount == 0 then
+        Log:trace("changeFarmBalance: zero amount, skipping (no-op)")
+        return
+    end
+
     -- Use batching system for batchable transactions, log others directly
     if RmTransactionBatcher.shouldBatch(moneyType.statistic) then
         -- BATCHABLE path threads the consumed context record into the batch (TL-22/TL-36): addToBatch
