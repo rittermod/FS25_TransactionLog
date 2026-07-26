@@ -32,7 +32,8 @@ RmTransactionLog.previousCalendarYear = nil  -- Format: "YYYY"
 
 -- Pending-context holder (TL-19; extended TL-36): a synchronous set/consume-once channel that hands a
 -- subject (WHAT) and a location (WHERE) from a call-site into the universal Farm.changeBalance sink,
--- which sees only farm / amount / moneyType. A call-site prepend-hook sets these IMMEDIATELY before the
+-- which sees only farm / amount / moneyType. A call-site capture hook (a prepend, or a return-preserving
+-- overwrite where the site's return is load-bearing) sets these IMMEDIATELY before the
 -- intended addMoney; changeFarmBalance consumes them once at entry (clearing all FIVE) and threads them
 -- into BOTH the DIRECT logTransaction record AND (TL-22) the batchable addToBatch call. Storage is FIVE
 -- scalar module fields behind a RECORD-shaped API (TL-36 decision 2a): setPendingContext(context) reads
@@ -476,7 +477,8 @@ end
 
 -- ============================================================
 -- Pending context (TL-19): synchronous set/consume-once channel for transaction enrichment.
--- A call-site prepend-hook stashes a subject/location here IMMEDIATELY before the intended addMoney;
+-- A call-site capture hook (a prepend, or a return-preserving overwrite where the site's return is
+-- load-bearing) stashes a subject/location here IMMEDIATELY before the intended addMoney;
 -- changeFarmBalance consumes it once at entry. SellingStation sales set the subject (TL-26) AND location
 -- (TL-25); animal trades (TL-23), shop buy/sell (TL-24), and BuyingStation input purchases (TL-27) set the
 -- subject; production direct-sells (TL-28) set subject + location; the deferred FillTrigger / AI-helper
@@ -529,20 +531,21 @@ function RmTransactionLog.consumePendingContext()
 end
 
 -- ============================================================
--- SellingStation subject + location capture (TL-26 subject / TL-25 location): the mod's FIRST prepend.
--- Reads the sold fillType (WHAT) AND the station's location (WHERE) off SellingStation.sellFillType BEFORE
--- the engine credits the money, and stashes them as ONE pending context (via setPendingContext) so the
--- already-appended changeFarmBalance consumes it and the sale's row carries the fill type + the station.
+-- SellingStation subject + location capture (TL-26 subject / TL-25 location): a RETURN-PRESERVING capture
+-- wrap. Reads the sold fillType (WHAT) AND the station's location (WHERE) off SellingStation.sellFillType
+-- BEFORE the engine credits the money, and stashes them as ONE pending context (via setPendingContext) so the
+-- already-appended changeFarmBalance consumes it and the sale's row carries the fill type + the station, then
+-- forwards the base's return UNCHANGED (TL-51 -- sellFillType returns the sale price; see wrapSellFillType).
 -- ProductionPoint direct-sell subject + location is captured in TL-28 (its own overwrite block below).
 -- ============================================================
 
--- One-shot install guard: set true once the prepend is wrapped, so a second install call (a stray
--- re-source or a test) never stacks a second prepend on the shared SellingStation.sellFillType chain.
+-- One-shot install guard: set true once the capture wrap is installed, so a second install call (a stray
+-- re-source or a test) never stacks a second wrap on the shared SellingStation.sellFillType chain.
 RmTransactionLog.sellFillTypeHookInstalled = false
 
 ---Resolve a selling station's WHERE (location) to an owning-placeable id + display-name snapshot. PURE and
----RAISE-FREE BY CONSTRUCTION -- this runs inside the sellFillType prepend, and a raise there would prevent
----the real sale -- so every access is type()-guarded and there is NO pcall. Returns two VALUE snapshots:
+---RAISE-FREE BY CONSTRUCTION -- this runs inside the sellFillType capture wrap, and a raise there would
+---prevent the real sale -- so every access is type()-guarded and there is NO pcall. Returns two VALUE snapshots:
 ---plain strings copied at call time, retaining NO reference to the placeable, so a placeable deleted before
 ---the batch flush cannot cause a stale deref. No globals, no g_server read. The four load-bearing guards:
 ---  1. OUTER: a non-table sellingStation returns nil, nil (indexing .owningPlaceable would otherwise raise).
@@ -594,15 +597,17 @@ function RmTransactionLog.resolveSellingStationLocation(sellingStation)
     return locationId, locationName
 end
 
----Prepend callback for SellingStation.sellFillType: resolve the sold fillType (WHAT) AND the station's
----location (WHERE) TOGETHER, and stash them as ONE pending context for the money credit that follows in the
----same synchronous stack. Subject and location are two ORTHOGONAL dimensions captured at the same site
----(self IS the station), folded into ONE setPendingContext because a second call would clobber the first
----(TL-25). The signature mirrors sellFillType's params so fillTypeIndex is read positionally (4th incl.
----self); sellingStation (self) is now USED (TL-25) to resolve the location. Server-authority is enforced
----ONCE, at setPendingContext (g_server-guarded) - deliberately NO duplicate g_server guard here, so a
----client-side prepend is a harmless read that no-ops at the setter. RAISE-FREE: every read is type()-guarded
----(no pcall), because a raise in the prepend would prevent the real sale. The two dimensions degrade
+---Capture callback for SellingStation.sellFillType, invoked by wrapSellFillType BEFORE the base runs:
+---resolve the sold fillType (WHAT) AND the station's location (WHERE) TOGETHER, and stash them as ONE pending
+---context for the money credit that follows in the same synchronous stack. Subject and location are two
+---ORTHOGONAL dimensions captured at the same site (self IS the station), folded into ONE setPendingContext
+---because a second call would clobber the first (TL-25). The signature mirrors sellFillType's params so
+---fillTypeIndex is read positionally (4th incl. self); sellingStation (self) is now USED (TL-25) to resolve
+---the location. PURE capture: it arms context and returns nothing -- the return path belongs to
+---wrapSellFillType, which forwards the base's own return (TL-51). Server-authority is enforced ONCE, at
+---setPendingContext (g_server-guarded) - deliberately NO duplicate g_server guard here, so a client-side
+---capture is a harmless read that no-ops at the setter. RAISE-FREE: every read is type()-guarded
+---(no pcall), because a raise here would prevent the real sale. The two dimensions degrade
 ---INDEPENDENTLY: an unresolvable fillType (nil index, absent/methodless g_fillTypeManager, non-table desc)
 ---leaves the subject nil WITHOUT dropping the location, and a placeable-less station leaves the location nil
 ---without dropping the subject; a nil name/title/id nil-normalizes downstream. Past the farmId leak guard
@@ -658,28 +663,62 @@ function RmTransactionLog.captureSellFillTypeContext(sellingStation, farmId, fil
     })
 end
 
----Install the SellingStation.sellFillType prepend ONCE, at file scope. Idempotent + presence-guarded:
----wraps only when SellingStation and its sellFillType method exist AND the hook is not already installed;
----a second call (a stray re-source or a test) is a silent no-op. Logs a WARNING and skips when the
----target is absent (empty-degrade: the mod still loads; sales just record a nil subject).
----@return boolean installedThisCall true if this call wrapped the prepend, false if already installed or skipped
+---overwrittenFunction adapter for SellingStation.sellFillType. Arms the sold-fillType subject + the station
+---location (via the pure captureSellFillTypeContext) BEFORE the base runs, then forwards to superFunc and
+---RETURNS its result UNCHANGED. overwrittenFunction (NOT prependedFunction) is REQUIRED here: sellFillType
+---returns the sale price, and a return-discarding wrapper hands nil to whatever reads it. No plain CALLER of
+---sellFillType consumes that return -- but a WRAPPER does: Precision Farming (a mod GIANTS ships with the
+---game, enabled per savegame, not an optional add-on) overwrites the same method, reads what the layer below
+---returns and scales it, so it does arithmetic on nil and RAISES. The observed result: the money is credited
+---again and again while the trailer never empties -- the raise lands after the sale has already been paid but
+---before the unload completes, so the unload is retried every tick and paid again each time (reported
+---in-game on 2.0.0.0-dev.3). Lesson for the next hook: deciding prepend-vs-wrap by
+---checking only whether a CALLER assigns the return is not sufficient -- a wrapper registered on the method is
+---a consumer too, and it does not look like a call site. A bare Utils.prependedFunction does not
+---preserve the wrapped function's return; Utils.overwrittenFunction lets us return the base's result
+---unchanged. Arming is a harmless side effect; the return path is TRANSPARENT -- nothing is normalized and
+---ALL return values are forwarded (a tail call), so a wrapper stacked above us sees exactly what the base
+---returned. RUNTIME CAPTURE SEMANTICS ARE UNCHANGED from the earlier prepend; only the return path changed.
+---@param self table the SellingStation instance
+---@param superFunc function the base sellFillType
+---@return number|nil price the base's sale price, forwarded unchanged (all return values forwarded)
+function RmTransactionLog.wrapSellFillType(self, superFunc, ...)
+    RmTransactionLog.captureSellFillTypeContext(self, ...)
+    return superFunc(self, ...)
+end
+
+---Install the SellingStation.sellFillType capture wrap ONCE, at file scope. Idempotent + presence-guarded,
+---NO permanent lockout: reads SellingStation from _G at call time and sets the install flag only AFTER
+---wrapping (the TL-24/27 installer discipline), so a target absent at first call is still wrapped on a later
+---call; a second call once wrapped is a silent no-op. Every dependency is checked with type() rather than a
+---nil compare, so a truthy non-function cannot pass the gate and raise on every sale. Logs a WARNING and skips
+---when SellingStation, its sellFillType, or Utils.overwrittenFunction is absent (empty-degrade: the mod still
+---loads and selling still works; sales just record a nil subject/location). Uses Utils.overwrittenFunction
+---(RETURN-PRESERVING), NOT prependedFunction -- see wrapSellFillType for why the base's return must be
+---forwarded.
+---@return boolean installedThisCall true if this call wrapped the method, false if already installed or skipped
 function RmTransactionLog.installSellingStationCaptureHook()
     if RmTransactionLog.sellFillTypeHookInstalled then
         return false
     end
-    if SellingStation == nil or SellingStation.sellFillType == nil then
-        Log:warning("SellingStation.sellFillType unavailable; sold-fillType subject capture disabled")
+    local class = _G.SellingStation
+    if type(class) ~= "table"
+        or type(class.sellFillType) ~= "function"
+        or type(Utils) ~= "table"
+        or type(Utils.overwrittenFunction) ~= "function" then
+        Log:warning("SellingStation.sellFillType or Utils.overwrittenFunction unavailable; "
+            .. "sold-fillType subject + location capture disabled")
         return false
     end
-    SellingStation.sellFillType = Utils.prependedFunction(
-        SellingStation.sellFillType, RmTransactionLog.captureSellFillTypeContext)
+    class.sellFillType = Utils.overwrittenFunction(
+        class.sellFillType, RmTransactionLog.wrapSellFillType)
     RmTransactionLog.sellFillTypeHookInstalled = true
-    Log:debug("Installed SellingStation.sellFillType subject-capture prepend")
+    Log:debug("Installed SellingStation.sellFillType subject+location-capture wrap (return-preserving)")
     return true
 end
 
 -- ============================================================
--- Animal buy/sell subject capture (TL-23): the mod's SECOND prepend site. Reads the traded animal's
+-- Animal buy/sell subject capture (TL-23): the mod's FIRST prepend site. Reads the traded animal's
 -- subType off AnimalBuyEvent.run / AnimalSellEvent.run BEFORE the engine credits the money, resolves it to
 -- a subject {subjectId=subType.name, subjectName=fillType.title, subjectKind="animal"}, and stashes it via
 -- setPendingContext so the already-appended changeFarmBalance consumes it and the (non-batchable,
@@ -825,7 +864,7 @@ function RmTransactionLog.installAnimalTradeCaptureHooks()
 end
 
 -- ============================================================
--- Shop buy/sell subject capture (TL-24): the mod's THIRD prepend site-group. Reads the bought/sold store
+-- Shop buy/sell subject capture (TL-24): the mod's SECOND prepend site-group. Reads the bought/sold store
 -- item off the six base-game shop entry points BEFORE the engine credits the money, resolves it to
 -- {subjectId=storeItem.xmlFilename, subjectName=<display>, subjectKind="storeItem"}, and stashes it via
 -- setPendingContext so the already-appended changeFarmBalance consumes it and the resulting row carries the
@@ -1355,8 +1394,9 @@ end
 -- loop or per frame, needing a full reimplementation (see the TL-27 spec's Never section).
 -- ============================================================
 
--- One-shot install guard: set true once the prepend is wrapped, so a second install call (a stray re-source
--- or a test) never stacks a second prepend on the shared BuyingStation.addFillLevelToFillableObject chain. A
+-- One-shot install guard: set true once the capture wrap is installed, so a second install call (a stray
+-- re-source or a test) never stacks a second wrap on the shared BuyingStation.addFillLevelToFillableObject
+-- chain. A
 -- target absent at first call leaves it false so a later call re-wraps (NO permanent lockout).
 RmTransactionLog.buyingStationHookInstalled = false
 
@@ -1368,7 +1408,7 @@ RmTransactionLog.buyingStationHookInstalled = false
 ---(out of scope; no input-purchase location ticket exists). The signature mirrors the base method's params
 ---(self first -- it is a colon method), so fillTypeIndex is read positionally (4th incl. self).
 ---
----RAISE-FREE: every read is type()/callability-guarded (no pcall), because a raise in the prepend would break
+---RAISE-FREE: every read is type()/callability-guarded (no pcall), because a raise in the capture would break
 ---the real purchase. The FillType.UNKNOWN compare is raise-safe: type(FillType)=="table" is checked first, so
 ---an absent FillType (odd load order) can never be dereferenced (the mod holds no other FillType.* reference).
 ---
@@ -1386,7 +1426,7 @@ RmTransactionLog.buyingStationHookInstalled = false
 ---not "self-healing".
 ---
 ---Server-authority is enforced ONCE, at setPendingContext (g_server-guarded) -- deliberately NO duplicate
----g_server guard here, so a client-side prepend is a harmless read that no-ops at the setter. Past the leak
+---g_server guard here, so a client-side capture is a harmless read that no-ops at the setter. Past the leak
 ---guard the callback ALWAYS sets once (possibly all-nil): an all-nil set is harmless -- changeFarmBalance
 ---consumes+clears on every authoritative call, so it behaves exactly like no set. The subject degrades to nil
 ---on a nil index / absent/methodless g_fillTypeManager / non-table desc; a nil .name or .title nil-normalizes
@@ -2662,19 +2702,21 @@ PlayerInputComponent.registerGlobalPlayerActionEvents = Utils.appendedFunction(
 
 Farm.changeBalance = Utils.appendedFunction(Farm.changeBalance, RmTransactionLog.changeFarmBalance)
 
--- SellingStation subject capture (TL-26): install the sold-fillType prepend once, here at FILE scope
--- (NOT in loadMap, which re-runs per mission and would stack duplicate prepends -- the once-per-process
--- class-method-hook rule). This is the mod's first prepend; all prior hooks are appendedFunction.
+-- SellingStation subject + location capture (TL-26 subject / TL-25 location): install the sold-fillType
+-- capture wrap once, here at FILE scope (NOT in loadMap, which re-runs per mission and would stack duplicate
+-- wraps -- the once-per-process class-method-hook rule). A RETURN-PRESERVING Utils.overwrittenFunction wrap
+-- (TL-51), NOT a prepend: sellFillType returns the sale price, and a mod stacked above us reads it (see
+-- wrapSellFillType).
 RmTransactionLog.installSellingStationCaptureHook()
 
 -- Animal buy/sell subject capture (TL-23): install the two animal-trade prepends once, here at FILE scope
 -- (same once-per-process rule as the TL-26 installer above -- loadMap would stack duplicate prepends). This
--- is the mod's SECOND prepend site, mirroring the SellingStation installer.
+-- is the mod's FIRST prepend site, mirroring the SellingStation installer's shape.
 RmTransactionLog.installAnimalTradeCaptureHooks()
 
 -- Shop buy/sell subject capture (TL-24): install the six shop prepends once, here at FILE scope (same
 -- once-per-process rule as the TL-26/TL-23 installers above -- loadMap would stack duplicate prepends). The
--- mod's THIRD prepend site-group (three Buy*Data.onBought + three Sell*Event.run); all resolve to
+-- mod's SECOND prepend site-group (three Buy*Data.onBought + three Sell*Event.run); all resolve to
 -- subjectKind "storeItem".
 RmTransactionLog.installShopSubjectHooks()
 
