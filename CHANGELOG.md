@@ -2,6 +2,13 @@
 
 All notable user-facing changes to FS25 Transaction Log are documented here.
 
+2.0.0.0-dev.4:
+- Added: a View button in the transaction log (Right Shift + T) cycles the list between Individual, Day, Month, and Year - the combined views total income and expenses per day, month, or year and show each period's closing balance, so you can compare periods and spot recurring costs at a glance.
+- Fixed: selling at a selling station alongside Precision Farming no longer pays out over and over - the trailer now empties in one go and the sale is credited once. Previously the unload never finished, so the money kept being added until you drove away.
+- Fixed: Internal - a zero-value transaction (e.g. a production selling a 0-value output) no longer creates a throwaway empty batch. No change to the saved or exported log for players.
+- Changed: Internal groundwork for transaction enrichment - a production's recurring running costs now record which production they came from (the where). Captured behind the scenes; not shown in the log yet, so no visible change for players.
+- Changed: Internal groundwork for transaction enrichment - automatic water supply for animal husbandries now records the water fill type (the what) and which husbandry the cost came from (the where). Captured behind the scenes; not shown in the log yet, so no visible change for players.
+
 2.0.0.0-dev.3:
 - Fixed: the transaction log window (Right Shift + T) and comment input no longer fail to open when the mod loads before other Ritter mods.
 - Changed: Internal groundwork for transaction enrichment - buying field inputs (fuel, seed, fertilizer, water, lime) at a buying station now records which input was bought as the transaction's subject. Captured behind the scenes; not shown in the log yet, so no visible change for players.
